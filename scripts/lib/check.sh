@@ -93,6 +93,25 @@ installed_skill_count() {
   printf '%s' "$count"
 }
 
+install_hint() {
+  local tool="$1" platform="$2"
+  case "${tool}:${platform}" in
+    ffmpeg:macos) echo "brew install ffmpeg" ;;
+    ffmpeg:linux|ffmpeg:wsl) echo "sudo apt install ffmpeg" ;;
+    ffmpeg:windows) echo "winget install Gyan.FFmpeg" ;;
+    1password-cli:macos) echo "brew install 1password-cli" ;;
+    1password-cli:linux|1password-cli:wsl) echo "sudo apt install 1password-cli" ;;
+    1password-cli:windows) echo "winget install AgileBits.1Password.CLI" ;;
+    pandoc:macos) echo "brew install pandoc" ;;
+    pandoc:linux|pandoc:wsl) echo "sudo apt install pandoc" ;;
+    pandoc:windows) echo "winget install JohnMacFarlane.Pandoc" ;;
+    obsidian-cli:macos) echo "brew install obsidian-cli" ;;
+    obsidian-cli:linux|obsidian-cli:wsl) echo "请按 obsidian-cli 官方说明安装" ;;
+    obsidian-cli:windows) echo "请按 obsidian-cli 官方说明安装" ;;
+    *) echo "请按官方说明安装" ;;
+  esac
+}
+
 cmd_check() {
   local src_query="${1:-}"
   echo -e "${C}🔍 Check — 诊断${N}"
@@ -201,11 +220,7 @@ cmd_check() {
   echo ""
 
   local current_platform="unknown"
-  case "$(uname -s)" in
-    Darwin) current_platform="macos" ;;
-    Linux) current_platform="linux" ;;
-    CYGWIN*|MINGW*|MSYS*) current_platform="windows" ;;
-  esac
+  current_platform=$(platform_id)
 
   local ready_skills=() easy_fix_skills="" hard_fix_skills=""
   local ready_count=0 easy_count=0 hard_count=0
@@ -222,28 +237,28 @@ cmd_check() {
     if echo "$skill_content" | grep -qE "ffmpeg"; then
       if ! command -v ffmpeg &>/dev/null; then
         risk_notes+="\n    ${Y}•${N} 需: ffmpeg (未安装)"
-        risk_notes+="\n      ${D}└─ 修复: brew install ffmpeg${N}"
+        risk_notes+="\n      ${D}└─ 修复: $(install_hint ffmpeg "$current_platform")${N}"
         risk_level=$((risk_level > 1 ? risk_level : 1))
       fi
     fi
     if echo "$skill_content" | grep -qE "1password|\"op\"| \"op "; then
       if ! command -v op &>/dev/null; then
         risk_notes+="\n    ${Y}•${N} 需: 1Password CLI (未安装)"
-        risk_notes+="\n      ${D}└─ 修复: brew install 1password-cli${N}"
+        risk_notes+="\n      ${D}└─ 修复: $(install_hint 1password-cli "$current_platform")${N}"
         risk_level=$((risk_level > 1 ? risk_level : 1))
       fi
     fi
     if echo "$skill_content" | grep -qE "pandoc"; then
       if ! command -v pandoc &>/dev/null; then
         risk_notes+="\n    ${Y}•${N} 需: pandoc (未安装)"
-        risk_notes+="\n      ${D}└─ 修复: brew install pandoc${N}"
+        risk_notes+="\n      ${D}└─ 修复: $(install_hint pandoc "$current_platform")${N}"
         risk_level=$((risk_level > 1 ? risk_level : 1))
       fi
     fi
     if echo "$skill_content" | grep -qE "obsidian-cli"; then
       if ! command -v obsidian-cli &>/dev/null; then
         risk_notes+="\n    ${Y}•${N} 需: obsidian-cli (未安装)"
-        risk_notes+="\n      ${D}└─ 修复: brew install obsidian-cli${N}"
+        risk_notes+="\n      ${D}└─ 修复: $(install_hint obsidian-cli "$current_platform")${N}"
         risk_level=$((risk_level > 1 ? risk_level : 1))
       fi
     fi
@@ -314,7 +329,7 @@ cmd_check() {
     fi
   done
 
-  echo -e "  ${G}🟢 立即可用${N} (${ready_count}个) — 所有依赖已满足"
+  echo -e "  ${G}🟢 当前看起来可用${N} (${ready_count}个) — 依赖检查未发现明显阻塞"
   echo -n "     "
   if [ ${#ready_skills[@]} -gt 0 ]; then
     printf '%s\n' "${ready_skills[@]}" | head -10 | tr '\n' ' '
@@ -335,7 +350,7 @@ cmd_check() {
   fi
 
   echo ""
-  echo -e "  ${D}💡 提示: 即使标记为 🔴 的技能仍可正常使用，只是相关功能会受限${N}"
+  echo -e "  ${D}💡 提示: 这里是静态体检结果。标记为可用并不等于已经实机验证通过；标记为 🔴 也不等于完全不能用，只是相关功能可能受限${N}"
 
   if [ "$ACT_WEB" -eq 1 ]; then
     emit_context_inventory "$thost"

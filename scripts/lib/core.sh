@@ -1,3 +1,94 @@
+platform_id() {
+  case "$(uname -s)" in
+    Darwin) echo "macos" ;;
+    Linux)
+      if [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null; then
+        echo "wsl"
+      else
+        echo "linux"
+      fi
+      ;;
+    CYGWIN*|MINGW*|MSYS*) echo "windows" ;;
+    *) echo "unknown" ;;
+  esac
+}
+
+looks_like_explicit_path() {
+  case "$1" in
+    "~"*|/*|./*|../*|[A-Za-z]:\\*|[A-Za-z]:/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+windows_path_to_posix() {
+  local path="$1"
+  case "$path" in
+    [A-Za-z]:\\*)
+      printf '%s' "$path" | sed -E 's#\\#/#g; s#^([A-Za-z]):#/\\L\\1#'
+      ;;
+    *)
+      printf '%s' "$path"
+      ;;
+  esac
+}
+
+expand_input_path() {
+  local path="$1"
+  case "$path" in
+    "~"*) path="${path/#\~/$HOME}" ;;
+  esac
+  windows_path_to_posix "$path"
+}
+
+append_unique_dir() {
+  local candidate="$1"
+  [ -n "$candidate" ] || return 0
+  [ -d "$candidate" ] || return 0
+  local existing
+  for existing in "${SCAN_ROOTS[@]-}"; do
+    [ "$existing" = "$candidate" ] && return 0
+  done
+  SCAN_ROOTS+=("$candidate")
+}
+
+scan_roots() {
+  SCAN_ROOTS=()
+  append_unique_dir "$HOME"
+
+  local platform userprofile
+  platform=$(platform_id)
+  userprofile=$(windows_path_to_posix "${USERPROFILE:-}")
+  append_unique_dir "$userprofile"
+
+  if [ "$platform" = "wsl" ] && [ -n "${USER:-}" ]; then
+    append_unique_dir "/mnt/c/Users/${USER}"
+  fi
+
+  printf '%s\n' "${SCAN_ROOTS[@]}"
+}
+
+relative_for_label() {
+  local path="$1" root
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    case "$path" in
+      "$root"/*)
+        printf '%s' "${path#$root/}"
+        return 0
+        ;;
+      "$root")
+        printf '.'
+        return 0
+        ;;
+    esac
+  done < <(scan_roots)
+  case "$path" in
+    "$HOME"/*) printf '%s' "${path#$HOME/}" ;;
+    /*) printf '%s' "${path#/}" ;;
+    *) printf '%s' "$path" ;;
+  esac
+}
+
 init_data_dir() {
   local candidates=("$DATA_DIR")
   [ "$DATA_DIR" != "$FALLBACK_DATA_DIR" ] && candidates+=("$FALLBACK_DATA_DIR")
@@ -100,6 +191,33 @@ short_path() {
     "$HOME"/*) echo "~/${1#$HOME/}" ;;
     *) echo "$1" ;;
   esac
+}
+
+source_display_name() {
+  local name="$1" dir="$2" cache="$3"
+  local duplicates suffix short
+  duplicates=$(awk -F: -v n="$name" '$1==n{c++} END{print c+0}' "$cache" 2>/dev/null)
+  if [ "${duplicates:-0}" -le 1 ]; then
+    echo "$name"
+    return 0
+  fi
+
+  short=$(short_path "$dir")
+  suffix=$(printf '%s\n' "$short" | awk -F/ '
+    {
+      for (i = NF; i >= 1; i--) {
+        part = $i
+        gsub(/^[.]+/, "", part)
+        if (part == "" || part == "skills" || part == "workspace" || part == "opencode" || part == "claude" || part == "openclaw" || part == "extensions") {
+          continue
+        }
+        print part
+        exit
+      }
+    }
+  ')
+  [ -n "$suffix" ] || suffix="$short"
+  echo "${name} [${suffix}]"
 }
 
 target_label() {
@@ -279,11 +397,16 @@ do_scan() {
   local cache="$DATA_DIR/last_scan.txt" tmpraw seen
   tmpraw=$(mktemp)
   seen=$(mktemp)
+  : > "$tmpraw"
 
-  find "$HOME" -maxdepth 6 \
-    -type d \( -name 'node_modules' -o -name 'Library' -o -name '.Trash' -o -name '.git' \
-    -o -name 'Applications' -o -name 'AppData' -o -name 'Pictures' -o -name 'Music' -o -name 'Movies' \) -prune \
-    -o -name 'SKILL.md' -type f -print 2>/dev/null | \
+  local root
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    find "$root" -maxdepth 6 \
+      -type d \( -name 'node_modules' -o -name 'Library' -o -name '.Trash' -o -name '.git' \
+      -o -name 'Applications' -o -name 'AppData' -o -name 'Pictures' -o -name 'Music' -o -name 'Movies' \) -prune \
+      -o -name 'SKILL.md' -type f -print 2>/dev/null
+  done < <(scan_roots) | \
     sed 's|/SKILL.md$||' | while read -r d; do dirname "$d"; done | \
     sort | uniq -c | sort -rn > "$tmpraw"
 
@@ -298,7 +421,7 @@ do_scan() {
     done < "$seen"
     [ "$skip" -eq 1 ] && continue
     echo "$parent" >> "$seen"
-    echo "$(label "${parent#$HOME/}"):${parent}:${count}" >> "$cache"
+    echo "$(label "$(relative_for_label "$parent")"):${parent}:${count}" >> "$cache"
   done < "$tmpraw"
   rm -f "$tmpraw" "$seen"
   echo "$cache"
@@ -306,6 +429,14 @@ do_scan() {
 
 resolve() {
   local q="$1" c="$2"
+  local explicit
+  if looks_like_explicit_path "$q"; then
+    explicit=$(expand_input_path "$q")
+    if [ -d "$explicit" ]; then
+      echo "$explicit"
+      return 0
+    fi
+  fi
   if [ -d "$q" ]; then
     echo "$q"
   elif [[ "$q" =~ ^[0-9]+$ ]]; then

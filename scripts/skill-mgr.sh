@@ -73,15 +73,14 @@ case "${1:-help}" in
   check-web) ACT_WEB=1; cmd_check "${@:2}" ;;
   act-web)   ACT_WEB=1; cmd_act "${@:2}" ;;
   help|*)
-    echo -e "skill-mgr v${VERSION} ${D}— PDCA 技能管家${N}"
+    echo -e "skill-mgr v${VERSION} ${D}— skill manager${N}"
     echo ""
-    echo "  scan             📋 看外面还有什么可用"
-    echo "  steal <从> [技能] 🏴 从别处偷到这里"
-    echo "  check [从]       🔍 看这里稳不稳，或看从哪偷到这里值不值"
-    echo "  act              🎯 联网增强版 check，顺带给升级建议"
+    echo "  scan             在本地扫描所有技能库"
+    echo "  steal <从> [技能] 从其他技能库迁移到这里"
+    echo "  check [从]       默认检查当前库健康度"
+    echo "  act              联网后按当前身份推荐 skills"
     echo ""
-    echo "  最常用：check / check home-claude / act / steal CC-Switch github"
-    echo "  常用目标别名: here / home-claude / home-openclaw / home-codex / home-amp"
-    echo -e "  ${D}想换目标时再用 --to；想联网找候选时再用 --web${N}"
+    echo -e "  ${D}常用别名: here / home-claude / home-openclaw / home-codex / home-amp${N}"
+    echo -e "  ${D}需要换目标时再用 --to；需要联网时再用 --web${N}"
     ;;
 esac

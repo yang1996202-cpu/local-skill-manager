@@ -1,75 +1,112 @@
 # skill-manager
 
-PDCA 技能管家 — 发现、偷取、诊断、推荐 Claude Code / OpenClaw / Codex 技能。
+一个给 AI 用的本地技能库管理器。
 
-## 一句话描述
+它解决 4 件事：
 
-管理 AI 编辑器技能库的瑞士军刀：扫描（Plan）→ 偷取（Do）→ 诊断（Check）→ 推荐（Act）。
+- `scan`：在本地扫描所有技能库
+- `steal`：从其他技能库迁移到这里
+- `check`：默认检查当前库健康度
+- `act`：联网后按当前身份推荐 skills
 
-## 安装
+适用场景：
 
-```bash
-# 克隆到 Claude Code 技能目录
-git clone https://github.com/YOUR_USERNAME/skill-manager.git ~/.claude/skills/skill-manager
-```
+- 你手里已经有很多 Claude Code / Codex / OpenClaw / Amp skill
+- 你不想手动翻目录、比对、复制、排兼容性
+- 你希望 AI 帮你做发现、迁移、诊断、推荐
 
-## 使用
-
-```bash
-# 进入任意项目目录，运行
-bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh <命令>
-```
-
-## 命令
-
-| 命令 | 作用 |
-|------|------|
-| `scan` | 扫描所有可用技能库，看看外面有什么 |
-| `steal <来源> [技能名]` | 从别处偷技能到当前项目 |
-| `check [来源]` | 诊断当前库健康度，或检查从某处偷取的兼容性 |
-| `act` | 基于项目身份做在线推荐 |
-
-## 示例
+## Quick Start
 
 ```bash
-# 1. 扫描所有库
-bash skill-mgr.sh scan
+# 进入任意项目目录
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh scan
 
-# 2. 检查从 CC-Switch 偷技能是否值得
-bash skill-mgr.sh check CC-Switch
+# 看某个来源值不值得偷
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh check CC-Switch
 
-# 3. 偷取 github 技能
-bash skill-mgr.sh steal CC-Switch github
+# 从别的库迁一个 skill 到这里
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh steal CC-Switch github
 
-# 4. 获取个性化推荐
-bash skill-mgr.sh act
+# 基于当前身份做在线推荐
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act
 ```
 
-## 环境变量
+## What It Does
 
-| 变量 | 说明 |
-|------|------|
-| `SKILL_MANAGER_DATA_DIR` | 数据目录，默认 `~/.skill-manager` |
-| `SKILL_MANAGER_TARGET` | 目标技能库路径 |
-| `SKILLSMP_API_KEY` | SkillsMP 在线推荐 API 密钥（可选） |
+### `scan`
 
-## 支持的目标库别名
+在本地扫描所有技能库，先给你总表，再告诉你当前库结构和最值得看的来源。
 
-- `here` - 当前目录的 `.claude/skills`
-- `home-claude` - `~/.claude/skills`
-- `home-openclaw` - `~/.opencode/skills`
-- `home-codex` - `~/.codex/skills`
-- `home-amp` - `~/.amp/skills`
+### `steal`
 
-## 原理
+把 skill 从别的库迁到当前目标库，支持软链和复制两种方式。
 
-基于 PDCA 循环设计：
+### `check`
 
-1. **Plan (scan)** - 收集信息，了解有哪些技能可用
-2. **Do (steal)** - 执行偷取，将技能复制到目标库
-3. **Check (check)** - 诊断健康度，检查依赖和兼容性
-4. **Act (act)** - 基于项目身份和在线数据给出推荐
+默认检查当前库健康度；如果传来源，就检查“从 A 偷到这里”值不值。
 
-## 许可证
+### `act`
+
+联网后，基于当前宿主、当前项目规则、当前已装 skill，给你轻量在线推荐。
+
+## Install
+
+```bash
+git clone https://github.com/yang1996202-cpu/local-skill-manager.git ~/.claude/skills/skill-manager
+```
+
+## Common Commands
+
+```bash
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh scan
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh steal <来源> <技能名>
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh check
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh check <来源>
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act
+```
+
+## Target Aliases
+
+- `here`
+- `home-claude`
+- `home-openclaw`
+- `home-codex`
+- `home-amp`
+
+## Optional Env
+
+- `SKILL_MANAGER_DATA_DIR`
+- `SKILL_MANAGER_TARGET`
+- `SKILLSMP_API_KEY`
+
+## Standard Examples
+
+标准输出样例在这里：
+
+- [scan-output-example.md](examples/scan-output-example.md)
+- [check-output-example.md](examples/check-output-example.md)
+- [act-output-example.md](examples/act-output-example.md)
+
+## Rule System
+
+这不是只有脚本的项目，它也是一套可迭代的规则系统：
+
+- [SKILL.md](SKILL.md)
+- [constitution.md](references/constitution.md)
+- [gotchas.md](references/gotchas.md)
+- [output-contract.md](references/output-contract.md)
+- [check-current.md](references/checklists/check-current.md)
+- [check-route.md](references/checklists/check-route.md)
+- [memory.md](references/memory.md)
+- [decisions.md](docs/decisions.md)
+
+## Reuse
+
+如果你想把这套方法复用到别的 skill：
+
+- 说明文档看 [reuse-kit.md](docs/reuse-kit.md)
+- 模板目录看 `templates/skill-governance/`
+
+## License
 
 MIT

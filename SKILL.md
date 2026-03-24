@@ -1,41 +1,80 @@
 ---
 name: skill-manager
 description: >-
-  PDCA 技能管家 — 发现推荐、偷取、诊断清理、使用报告。
+  PDCA 技能管家 — 发现推荐、偷取、诊断清理、演进方向。
   触发词："管理技能"、"看技能"、"偷技能"、"清理技能"、
   "skill manager"、"steal skills"、"check skills"。
 ---
 
-Run `bash <skill-dir>/scripts/skill-mgr.sh <command> [--to <target-lib>]`.
+运行方式：`bash <skill-dir>/scripts/skill-mgr.sh <command> [--to <target-lib>]`
 
 | Step | Command | What |
 |------|---------|------|
-| Plan | `scan` | 看外面还有什么库、什么技能可以拿来用 |
-| Do | `steal <来源> [技能]` | 从别处偷到这里 |
-| Check | `check [来源]` | 看当前库稳不稳；也可看“从 A 偷到这里”值不值 |
-| Act | `act` | 基于当前身份做在线推荐：看哪些官方入口和值得逛的 skill 来源 |
+| Plan | `scan` | 在本地扫描所有技能库 |
+| Do | `steal <来源> [技能]` | 从其他技能库迁移到这里 |
+| Check | `check [来源]` | 默认检查当前库健康度 |
+| Act | `act` | 联网后按当前身份推荐 skills |
 
-Flags: `--to <目标库>` `--web` `--dry-run` `--copy` `--yes`
-Optional env for online recommendation: `SKILLSMP_API_KEY`
-Friendly aliases for `--to`: `here` `home-claude` `home-openclaw` `home-codex` `home-amp`
+常用参数：`--to <目标库>` `--web` `--dry-run` `--copy` `--yes`
+在线推荐可选环境变量：`SKILLSMP_API_KEY`
+`--to` 友好别名：`here` `home-claude` `home-openclaw` `home-codex` `home-amp`
+
+核心护栏文件在这里：
+
+- `references/constitution.md`
+- `references/gotchas.md`
+- `references/checklists/check-current.md`
+- `references/checklists/check-route.md`
+- `references/output-contract.md`
+- `references/memory.md`
+- `docs/decisions.md`
+
+如果行为边界不清楚，优先相信这些文件，不要现场自由发挥。
+
+建议阅读顺序：
+
+1. `references/constitution.md`
+2. `references/output-contract.md`
+3. `references/checklists/check-current.md` or `references/checklists/check-route.md`
+4. `references/gotchas.md`
+5. `references/memory.md`
+6. `docs/decisions.md`
 
 > **CRITICAL RULE FOR INITIALIZATION**:
-> When you are triggered without explicit parameters (e.g. `/skill-manager`), your FIRST response MUST be to politely greet the user and automatically display the 4-step PDCA command table (scan, steal, check, act) in a clean markdown table so the user knows exactly what functions you provide. DO NOT automatically run `scan` unless the user asks you to. Keep the wording simple and user-facing: `scan` = 看外面还有什么, `steal` = 从哪偷到这里, `check` = 看这里稳不稳, `act` = 联网增强版 check.
+> 当你在没有明确参数时被触发（例如 `/skill-manager`），第一条回复必须是：礼貌打招呼，然后只展示一个简单的 4 命令表格：`scan`、`steal`、`check`、`act`。除非用户明确要求，否则不要自动运行 `scan`。这里的文案要固定、简洁：
+> - `scan` = 在本地扫描所有技能库
+> - `steal` = 从其他技能库迁移到这里
+> - `check` = 默认检查当前库健康度
+> - `act` = 联网后按当前身份推荐 skills
+> 除非用户要求，否则不要展开成 `PDCA 哲学解释`、`典型用法`、`技能管家分身故事` 或长篇参数教程。
 
 > **CRITICAL RULE FOR SCAN OUTPUT**: 
-> When the user runs `scan`, you MUST FIRST render the overarching "Total Libraries Summary Table" (整体总表), showing each external library, its total skill counts, and concrete locations as provided by the script. The user explicitly needs this overarching "blue print" matrix. Then preserve the script's "当前操作对象 / 当前项目上下文 / 当前目标库结构" sections, because those make the behavior deterministic. Finally, when presenting the missing skills, DO NOT summarize or compress them—show the **FULL LIST** exactly as outputted.
+> 当用户运行 `scan` 时，必须先展示“整体总表”，列出每个外部库、技能总数和脚本给出的具体位置。要保留脚本里的“当前操作对象 / 当前项目上下文 / 当前目标库结构”这些部分，因为这些信息能让结果更确定。推荐部分遵循脚本的精简默认：只先展开最值得看的少数来源，剩下的用简短线索带过，不要把所有库一次性铺满。
+> 1. **Do Not Use Fuzzy Equivalence Claims**: Do NOT summarize one library as `同上`, `几乎一样的技能池`, `差不多`, or similar unless you have explicit overlap evidence from the script. If you want to compare two libraries, state the concrete reason instead, for example: `来源不同，但当前缺失技能数量接近`, or `前几项候选高度重合`.
+> 2. **Do Not Recompute Counts**: If the script says the current library has `14` skills, do not re-count and accidentally list 15+. Reuse the script's numbers and keep entity/softlink counts consistent with the emitted structure section.
 
 > **CRITICAL RULE FOR CHECK / ACT**:
-> Treat `check` as the primary command. `act` is not a second full diagnosis system; it is the lightweight online recommendation view built on the current identity and host.
-> 1. **Check First, In Simple Language**: When the user runs `check`, explain it in plain terms: either they are checking `当前这里`, or checking `从 A 偷到这里`. Do not over-emphasize flags or internal terminology.
-> 2. **Honor Context Files (上下文优先级)**: Use the emitted project context files and identity/rule file inventory deterministically. Prefer the nearest project-level file over home-level memory. If `AGENTS.md`, `CLAUDE.md`, `CODEX.md`, `rules`, member files, or host identity files conflict, explicitly say you prioritized the nearest project file.
-> 3. **Act Must Stay Lightweight**: Do NOT turn `act` into a full health report, scenario clustering, or giant arsenal review. `act` should stay focused on online recommendation and next-step guidance.
-> 4. **Store / Official Sources Are Mandatory (商店/官网入口建议必出)**: In `act`, you MUST include a dedicated subsection named `商店 / 官方入口建议`. Cite at least TWO entries from the script's official/ecosystem/store output, and explain why each is relevant to the current project identity and host.
-> 5. **Online Candidates Are Mandatory**: In `act`, you MUST include a dedicated subsection named `在线候选建议`. Prefer `SkillsMP 在线候选` when present; otherwise fall back to `在线来源快照`. The recommendation must be grounded in the current host, identity files, and installed skills.
-> 5.1. **Do Not Over-Sell Weak Online Candidates**: Treat `SkillsMP` results as search hits first, not automatic endorsements. If the script indicates the online candidates have weak heat / low stars / only one strong hit, explicitly say they are exploratory options rather than primary recommendations. Do NOT present low-star candidates as top-priority installs just because they semantically match.
-> 5.2. **If User Points At A Recommended Online Source, Stay On That Source**: If the user follows up with a named source from `商店 / 官方入口建议` or `在线候选建议` such as `OpenCode Skills`, `OpenClaw 生态技能榜`, or `SkillsMP`, treat it as a request to continue using that ONLINE source. Do NOT silently switch back to local-library scan/grep unless the user explicitly asks to inspect local libraries. The correct follow-up is: explain why that source is relevant, summarize what it is, and if helpful recommend how to evaluate/install/borrow from it next.
-> 6. **Next Step Is Mandatory**: In `act`, always end with a concise subsection named `下一步推荐`, telling the user what to look at first and what command to run next (`check <来源>` or `steal <来源> <技能>`).
-> 7. **Do Not Make Up Separate Command Semantics**: Explain `act` as the online recommendation view built on the current identity, not as a second check report.
+> 把 `check` 当成主命令。`act` 不是第二套完整体检系统，它只是基于当前身份和宿主的轻量在线推荐视图。
+> 1. **Check First, In Simple Language**: 当用户运行 `check` 时，用简单中文解释：要么是在检查 `当前这里`，要么是在检查 `从 A 偷到这里`。不要过度强调参数或内部术语。
+> 1.1. **Do Not Invent `check <skill-name>` Semantics**: `check` is for the current target library, or for a source-to-target route such as `check CC-Switch`. Do NOT suggest `check <单个技能名>` unless the script explicitly supports that mode.
+> 2. **Honor Context Files (上下文优先级)**: 使用脚本产出的项目上下文文件、身份文件和规则文件清单，不要随意改写优先级。最近的项目级文件优先于主目录记忆。如果 `AGENTS.md`、`CLAUDE.md`、`CODEX.md`、`rules`、成员文件或宿主身份文件冲突，要明确说明你优先使用了最近的项目文件。
+> 2.1. **If User Gives An Exact Path, Trust The Path First**: 当用户给了明确绝对路径（例如 `/Users/.../web-access`），就把这个路径当成权威输入。先检查这个路径是否存在、它属于项目级库还是用户级库，再清楚说明结果。除非用户要求扩大搜索，否则不要跳去 `scan`、`grep` 或别的库乱找。
+> 2.2. **State Must Match Evidence**: 只有紧挨着的探针或命令真正成功了，才能说 `ready`、`connected`、`已启动`、`搞定`、`完全可用`。如果命令非零退出、超时或报缺文件，就保持保守，说明还卡在哪一步。
+> 3. **Act Must Stay Lightweight**: 不要把 `act` 扩写成完整健康报告、场景聚类分析或巨大武器库巡检。`act` 只聚焦在线推荐和下一步指引。
+> 4. **Store / Official Sources Are Mandatory (商店/官网入口建议必出)**: 在 `act` 里，必须有一个单独的小节叫 `商店 / 官方入口建议`。至少引用脚本输出里的两个官方/生态来源，并解释为什么它们和当前项目身份、当前宿主相关。
+> 5. **Online Candidates Are Mandatory**: 在 `act` 里，必须有一个单独的小节叫 `在线候选建议`。优先使用 `SkillsMP 在线候选`；如果没有，再退回 `在线来源快照`。推荐必须建立在当前宿主、身份文件和已装 skills 之上。
+> 5.1. **Do Not Over-Sell Weak Online Candidates**: 把 `SkillsMP` 结果先当搜索命中，不要直接当强推荐。如果脚本已经表明在线候选热度弱、星数低、或者只有一个明显强命中，就要明确说这是“探索项”，不是首选安装项。不要因为语义相关就把低星候选吹成最高优先级。
+> 5.2. **If User Points At A Recommended Online Source, Stay On That Source**: 如果用户追问的是 `商店 / 官方入口建议` 或 `在线候选建议` 里已经点名的在线来源，比如 `OpenCode Skills`、`OpenClaw 生态技能榜`、`SkillsMP`，那就继续沿着这个在线来源往下讲。除非用户明确要求看本地库，否则不要悄悄切回本地 `scan/grep`。正确做法是：解释这个来源为什么相关、它是什么、下一步怎么评估或安装或借用。
+> 6. **Next Step Is Mandatory**: 在 `act` 结尾，必须有一个简短小节叫 `下一步推荐`，明确告诉用户先看什么、下一条该跑什么命令（例如 `check <来源>` 或 `steal <来源> <技能>`）。
+> 7. **Do Not Make Up Separate Command Semantics**: 解释 `act` 时，要把它说成“基于当前身份的在线推荐视图”，不要讲成另一份 `check` 报告。
 
 > **CRITICAL RULE FOR RECOMMENDATION / ONBOARDING**:
-> At the end of EVERY interaction (after presenting a scan, steal, check, or act result), you MUST proactively suggest/recommend ONE of the other 3 commands they haven't just used. For example, if they just ran `scan`, dynamically recommend them to run `steal <库> <技能>` or `act` to see their strategic review. Always provide a highly contextual, 1-2 sentence hook explaining what they will *get and feel* by running that next suggested command.
+> 每次交互结束时（无论刚展示的是 `scan`、`steal`、`check` 还是 `act`），都要主动推荐另外 3 个命令里最合适的 1 个。比如用户刚跑完 `scan`，就可以推荐 `steal <库> <技能>`，或者推荐 `act` 去看更高层的下一步。这个推荐只要 1 到 2 句，但要结合上下文，说清用户跑了之后会得到什么。
+
+> **USE THE REFERENCE FILES, NOT JUST MEMORY OF THIS PROMPT**:
+> 1. 先读 `references/constitution.md`，确认固定命令模型和优先级规则。
+> 2. 要总结坑点之前，先看 `references/gotchas.md`。
+> 3. 要解释 `check` 之前，对齐 `references/checklists/check-current.md` 或 `references/checklists/check-route.md`。
+> 4. 要把命令结果改写成自然语言之前，先遵守 `references/output-contract.md`。
+> 5. 如果要跨轮承接上下文，只能用 `references/memory.md` 里定义的轻量方式。
+> 6. 如果想知道这些规则为什么这样定，再看 `docs/decisions.md`。

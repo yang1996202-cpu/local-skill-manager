@@ -13,55 +13,91 @@ cmd_scan() {
   show_target_structure
   echo ""
 
-  local total=0 idx=0 name dir count mark
+  local total=0 idx=0 name dir count mark display_name
   while IFS=: read -r name dir count; do
     idx=$((idx + 1))
     mark=""
     [ "$dir" = "$TARGET" ] && mark=" 🎯"
-    printf "  ${G}%2d${N}  %-16s ${B}%3d${N} skills  ${D}%s${N}%s\n" "$idx" "$name" "$count" "$dir" "$mark"
+    display_name=$(source_display_name "$name" "$dir" "$cache")
+    printf "  ${G}%2d${N}  %-16s ${B}%3d${N} skills  ${D}%s${N}%s\n" "$idx" "$display_name" "$count" "$dir" "$mark"
     total=$((total + count))
   done < "$cache"
   echo ""
   echo -e "  共 ${B}${total}${N} 个技能，${B}${idx}${N} 个库"
 
-  local my rec_count=0 d sname sdesc missing total_s
+  local my rec_count=0 d sname sdesc missing total_s summary expanded=0 expanded_labels="|"
+  local display_limit=12
+  local compact_count=0 compact_hidden=0
   my=$(mktemp)
-  for d in "$TARGET"/*/; do
-    [ -d "$d" ] && [ -f "${d}SKILL.md" ] && basename "$d"
+  summary=$(mktemp)
+  for d in "$TARGET"/*; do
+    [ -d "$d" ] && [ -f "${d}/SKILL.md" ] && basename "$d"
   done | sort > "$my"
 
   echo ""
-  echo -e "  ${Y}💡 推荐${N}"
+  echo -e "  ${Y}💡 推荐（默认只展开最值得看的几个来源）${N}"
   echo ""
 
   while IFS=: read -r name dir count; do
     [ "$dir" = "$TARGET" ] && continue
     missing=0
     total_s=0
-    for d in "$dir"/*/; do
-      [ -d "$d" ] && [ -f "${d}SKILL.md" ] || continue
+    for d in "$dir"/*; do
+      [ -d "$d" ] && [ -f "${d}/SKILL.md" ] || continue
       total_s=$((total_s + 1))
       grep -qx "$(basename "$d")" "$my" || missing=$((missing + 1))
     done
     if [ "$missing" -gt 0 ]; then
-      echo -e "  ✅ 从 ${G}${name}${N} 偷到这里 — ${B}${missing}${N}/${total_s} 个你还没有的"
-      for d in "$dir"/*/; do
-        [ -d "$d" ] && [ -f "${d}SKILL.md" ] || continue
-        sname=$(basename "$d")
-        grep -qx "$sname" "$my" && continue
-        sdesc=$(desc "$d")
-        [ -z "$sdesc" ] && sdesc="(无描述)"
-        printf "     ${D}-${N} %-30s ${D}%s${N}\n" "$sname" "$sdesc"
-      done
-      echo ""
+      printf '%s:%s:%s:%s\n' "$missing" "$name" "$dir" "$total_s" >> "$summary"
       rec_count=$((rec_count + 1))
-    else
-      echo -e "  ${D}⊘ ${name} — 这里已经齐了${N}"
     fi
   done < "$cache"
 
-  [ "$rec_count" -eq 0 ] && echo -e "  ${G}✓ 所有技能已同步${N}"
-  rm -f "$my"
+  if [ "$rec_count" -eq 0 ]; then
+    echo -e "  ${G}✓ 所有技能已同步${N}"
+  else
+    while IFS=: read -r missing name dir total_s; do
+      display_name=$(source_display_name "$name" "$dir" "$cache")
+      if [ "$name" = "$tlabel" ]; then
+        echo -e "  ${D}•${N} ${display_name} — ${missing}/${total_s} 个你还没有；这是同宿主全局库，想展开可运行 ${B}check ${name}${N}"
+        continue
+      fi
+      if [ "$expanded" -lt 3 ] && [[ "$expanded_labels" != *"|$name|"* ]]; then
+        expanded=$((expanded + 1))
+        expanded_labels="${expanded_labels}${name}|"
+        echo -e "  ✅ 从 ${G}${display_name}${N} 偷到这里 — ${B}${missing}${N}/${total_s} 个你还没有的"
+        local shown=0
+        for d in "$dir"/*; do
+          [ -d "$d" ] && [ -f "${d}/SKILL.md" ] || continue
+          sname=$(basename "$d")
+          grep -qx "$sname" "$my" && continue
+          shown=$((shown + 1))
+          if [ "$shown" -gt "$display_limit" ]; then
+            continue
+          fi
+          sdesc=$(desc "$d")
+          [ -z "$sdesc" ] && sdesc="(无描述)"
+          printf "     ${D}-${N} %-30s ${D}%s${N}\n" "$sname" "$sdesc"
+        done
+        if [ "$missing" -gt "$display_limit" ]; then
+          echo -e "     ${D}... 还有 $((missing - display_limit)) 个，想展开可运行 check ${name}${N}"
+        fi
+        echo ""
+      else
+        compact_count=$((compact_count + 1))
+        if [ "$compact_count" -le 8 ]; then
+          echo -e "  ${D}•${N} ${display_name} — ${missing}/${total_s} 个你还没有；想展开可运行 ${B}check ${name}${N}"
+        else
+          compact_hidden=$((compact_hidden + 1))
+        fi
+      fi
+    done < <(sort -t: -k1,1rn "$summary")
+    if [ "$compact_hidden" -gt 0 ]; then
+      echo -e "  ${D}... 还有 ${compact_hidden} 个来源可展开，用 check <来源> 查看${N}"
+    fi
+  fi
+
+  rm -f "$my" "$summary"
   return 0
 }
 
@@ -76,6 +112,10 @@ cmd_steal() {
   tlabel=$(target_label)
   thost=$(target_host_id)
 
+  if [ "$(platform_id)" = "windows" ] && [ "$USE_COPY" -eq 0 ]; then
+    USE_COPY=1
+  fi
+
   if [ -z "$src_query" ]; then
     echo -e "${C}🏴‍☠️ Do — 偷技能${N}"
     echo ""
@@ -85,6 +125,9 @@ cmd_steal() {
     echo "  steal <来源> a b c          从别处挑几个偷到这里"
     echo "  --to here                   强制偷到当前项目"
     echo "  --to home-openclaw          偷到主目录 OpenClaw"
+    if [ "$(platform_id)" = "windows" ]; then
+      echo -e "  ${D}当前是 Windows：默认用复制，避免软链权限坑；显式传 --copy 也可以${N}"
+    fi
     echo -e "  ${D}平时直接 scan / steal 就行，只有换目标时才用 --to${N}"
     return 0
   fi
@@ -131,7 +174,15 @@ cmd_steal() {
 
   echo ""
   echo -e "  新增 ${G}${new}${N} | 已有 ${skip}"
-  [ "$new" -gt 0 ] && [ "$DRY_RUN" -eq 0 ] && echo -e "  ${D}下一步: check${N}"
+  if [ "$new" -gt 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+    echo ""
+    echo "  下一步建议:"
+    echo "  - 直接试用刚偷进来的技能"
+    echo "  - check                看当前项目技能库整体是否稳定"
+    if [ -n "$src_name" ]; then
+      echo "  - check ${src_name}     看从 ${src_name} 偷到这里这条路线值不值"
+    fi
+  fi
 
   if [ "$new" -gt 0 ]; then
     echo ""
