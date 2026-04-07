@@ -1,19 +1,54 @@
 # skill-manager
 
-一个给 AI 用的本地技能库管理器。
+让 Agent 管理本地 skill 库的工具。
 
-它解决 4 件事：
+它不是另一个聊天 Agent。
+它做的是 Agent 经常会重复做、但每次临时做都很散的几件事：
 
-- `scan`：在本地扫描所有技能库
-- `steal`：从其他技能库迁移到这里，也可直接安装 GitHub skill
-- `check`：默认检查当前库健康度
-- `act`：联网后按当前身份推荐 skills
+- 看看这台机器上到底有哪些 skill 库
+- 把 skill 装进当前库
+- 检查当前库现在是不是健康、哪些 skill 有问题
+- 看 GitHub 装来的 skill 是不是已经落后于上游
 
-适用场景：
+## 为什么要有这个 skill
+
+直接让 Agent 临时处理，当然也能做。
+
+但通常会有 4 个问题：
+
+- 每次都从零开始，反复扫目录
+- 迁移和检查的口径不稳定
+- 装完 GitHub skill 之后，很快就忘了它来自哪里
+- 下一次再问时，又要重新解释一遍上下文
+
+装了 `skill-manager` 之后，这些事情会变成固定命令和固定结果：
+
+- `scan`：看全局 skill 盘子
+- `steal`：把 skill 装进当前库，支持本地来源和 GitHub
+- `check`：看当前库是否健康，也能看 GitHub skill 是否落后上游
+- `act`：给一个轻量的下一步在线建议
+
+## 它和 Agent 的分工
+
+- Agent：理解你现在要做什么，帮你判断、比较、收口
+- `skill-manager`：提供稳定的扫描、迁移、检查和状态记录
+
+一句话说：
+
+**Agent 负责智能判断，`skill-manager` 负责把这些重复动作变成稳定流程。**
+
+## 适合谁用
 
 - 你手里已经有很多 Claude Code / Codex / OpenClaw / Amp skill
 - 你不想手动翻目录、比对、复制、排兼容性
-- 你希望 AI 帮你做发现、迁移、诊断、推荐
+- 你希望 Agent 以后不是每次都从零开始管 skill
+
+## 4 个命令
+
+- `scan`：在本地扫描所有技能库
+- `steal`：从其他库或 GitHub 把 skill 装到这里
+- `check`：默认检查当前库健康度，也会看 GitHub skill 是否落后上游
+- `act`：联网后给轻量的下一步推荐
 
 ## Quick Start
 
@@ -34,23 +69,37 @@ bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh steal https://github.co
 bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act
 ```
 
-## What It Does
+## 具体会得到什么
 
 ### `scan`
 
-在本地扫描所有技能库，先给你总表，再告诉你当前库结构和最值得看的来源。
+你会知道：
+
+- 这台机器上有哪些 skill 库
+- 当前目标库是什么结构
+- 最值得看的来源是哪几个
 
 ### `steal`
 
-把 skill 从别的库迁到当前目标库，支持本地库迁移，也支持直接从 GitHub URL 安装。
+你可以：
+
+- 从本地别的 skill 库迁一个 skill 过来
+- 直接从 GitHub 仓库或 tree URL 安装一个 skill
 
 ### `check`
 
-默认检查当前库健康度；如果传来源，就检查“从 A 偷到这里”值不值；如果某些 skill 带 GitHub 来源元信息，也会顺手看它们是不是落后于上游。
+你会看到：
+
+- 当前库有没有坏链、缺文件、宿主兼容问题
+- 某个来源值不值得偷
+- GitHub 装来的 skill 现在是不是已经落后上游
 
 ### `act`
 
-联网后，基于当前宿主、当前项目规则、当前已装 skill，给你轻量在线推荐。
+你会拿到：
+
+- 一个轻量的在线补充方向
+- 不是大报告，只是下一步该先看什么
 
 ## Install
 
