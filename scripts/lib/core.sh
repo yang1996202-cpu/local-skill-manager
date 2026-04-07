@@ -103,6 +103,486 @@ init_data_dir() {
   exit 1
 }
 
+state_dir() {
+  printf '%s/state' "$DATA_DIR"
+}
+
+state_path() {
+  printf '%s/%s' "$(state_dir)" "$1"
+}
+
+ensure_state_dir() {
+  mkdir -p "$(state_dir)"
+}
+
+timestamp_utc() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+json_escape() {
+  printf '%s' "$1" | awk '
+    BEGIN { RS=""; ORS="" }
+    {
+      gsub(/\\/,"\\\\")
+      gsub(/"/,"\\\"")
+      gsub(/\r/,"\\r")
+      gsub(/\n/,"\\n")
+      gsub(/\t/,"\\t")
+      print
+    }
+  '
+}
+
+json_quote() {
+  printf '"%s"' "$(json_escape "$1")"
+}
+
+json_bool() {
+  case "${1:-0}" in
+    1|true|TRUE|yes|YES) printf 'true' ;;
+    *) printf 'false' ;;
+  esac
+}
+
+csv_from_args() {
+  local first=1 item
+  for item in "$@"; do
+    [ -n "$item" ] || continue
+    [ "$first" -eq 1 ] || printf ','
+    first=0
+    printf '%s' "$item"
+  done
+}
+
+json_array_from_csv() {
+  local csv="$1"
+  local first=1 item
+  local items=()
+  IFS=',' read -r -a items <<< "$csv" || true
+  printf '['
+  for item in "${items[@]+"${items[@]}"}"; do
+    [ -n "$item" ] || continue
+    [ "$first" -eq 1 ] || printf ', '
+    first=0
+    printf '%s' "$(json_quote "$item")"
+  done
+  printf ']'
+}
+
+scan_state_path() {
+  state_path "latest-scan.json"
+}
+
+health_state_path() {
+  state_path "latest-health.json"
+}
+
+history_state_path() {
+  state_path "history.jsonl"
+}
+
+history_limit() {
+  case "${SKILL_MANAGER_HISTORY_LIMIT:-200}" in
+    ''|*[!0-9]*)
+      printf '200'
+      ;;
+    *)
+      printf '%s' "${SKILL_MANAGER_HISTORY_LIMIT:-200}"
+      ;;
+  esac
+}
+
+trim_history_file() {
+  local file limit line_count tmp
+  file=$(history_state_path)
+  [ -f "$file" ] || return 0
+  limit=$(history_limit)
+  [ "$limit" -gt 0 ] || return 0
+  line_count=$(wc -l < "$file" | tr -d ' ')
+  [ "${line_count:-0}" -le "$limit" ] && return 0
+  tmp=$(mktemp)
+  tail -n "$limit" "$file" > "$tmp"
+  mv "$tmp" "$file"
+}
+
+skill_source_metadata_path() {
+  printf '%s/.skill-manager-source.env' "$1"
+}
+
+write_github_source_metadata() {
+  local skill_dir="$1" repo="$2" ref="$3" subdir="$4" source_url="$5" installed_commit="$6"
+  local meta
+  meta=$(skill_source_metadata_path "$skill_dir")
+  {
+    printf 'provider=github\n'
+    printf 'repo=%s\n' "$repo"
+    printf 'ref=%s\n' "$ref"
+    printf 'subdir=%s\n' "$subdir"
+    printf 'source_url=%s\n' "$source_url"
+    printf 'installed_commit=%s\n' "$installed_commit"
+    printf 'installed_at=%s\n' "$(timestamp_utc)"
+  } > "$meta"
+}
+
+read_skill_source_metadata() {
+  local meta="$1" key value
+  SKILL_SOURCE_PROVIDER=""
+  SKILL_SOURCE_REPO=""
+  SKILL_SOURCE_REF=""
+  SKILL_SOURCE_SUBDIR=""
+  SKILL_SOURCE_URL=""
+  SKILL_SOURCE_INSTALLED_COMMIT=""
+  SKILL_SOURCE_INSTALLED_AT=""
+  [ -f "$meta" ] || return 1
+  while IFS='=' read -r key value; do
+    case "$key" in
+      provider) SKILL_SOURCE_PROVIDER="$value" ;;
+      repo) SKILL_SOURCE_REPO="$value" ;;
+      ref) SKILL_SOURCE_REF="$value" ;;
+      subdir) SKILL_SOURCE_SUBDIR="$value" ;;
+      source_url) SKILL_SOURCE_URL="$value" ;;
+      installed_commit) SKILL_SOURCE_INSTALLED_COMMIT="$value" ;;
+      installed_at) SKILL_SOURCE_INSTALLED_AT="$value" ;;
+    esac
+  done < "$meta"
+  return 0
+}
+
+is_github_url() {
+  case "$1" in
+    https://github.com/*|http://github.com/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+parse_github_source() {
+  local url="$1" clean path owner repo rest ref subdir
+  clean="${url%%\?*}"
+  clean="${clean%%#*}"
+  clean="${clean%/}"
+  case "$clean" in
+    https://github.com/*) path="${clean#https://github.com/}" ;;
+    http://github.com/*) path="${clean#http://github.com/}" ;;
+    *) return 1 ;;
+  esac
+  owner="${path%%/*}"
+  path="${path#*/}"
+  repo="${path%%/*}"
+  repo="${repo%.git}"
+  rest="${path#*/}"
+  ref=""
+  subdir=""
+  if [ "$rest" != "$path" ] && [ "${rest%%/*}" = "tree" ]; then
+    rest="${rest#tree/}"
+    ref="${rest%%/*}"
+    if [ "$rest" != "$ref" ]; then
+      subdir="${rest#*/}"
+    fi
+  fi
+  [ -n "$owner" ] || return 1
+  [ -n "$repo" ] || return 1
+  printf '%s|%s|%s|%s|%s\n' "$owner" "$repo" "$ref" "$subdir" "$clean"
+}
+
+github_latest_path_commit() {
+  local repo="$1" ref="$2" subdir="$3"
+  if ! command -v gh >/dev/null 2>&1; then
+    return 1
+  fi
+  if [ -n "$subdir" ]; then
+    gh api --method GET "repos/${repo}/commits" -f path="$subdir" -f sha="$ref" -F per_page=1 --jq '.[0].sha' 2>/dev/null
+  else
+    gh api --method GET "repos/${repo}/commits/${ref}" --jq '.sha' 2>/dev/null
+  fi
+}
+
+write_scan_state() {
+  local cache="$1"
+  ensure_state_dir
+  local outfile
+  outfile=$(scan_state_path)
+
+  local total=0 libs=0
+  local entry name dir count display_name
+  local target_total=0 target_entities=0 target_symlinks=0 target_broken=0
+  local link_target kind
+
+  for entry in "$TARGET"/*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    target_total=$((target_total + 1))
+    if [ -L "$entry" ] && [ ! -e "$entry" ]; then
+      target_broken=$((target_broken + 1))
+    elif [ -L "$entry" ]; then
+      target_symlinks=$((target_symlinks + 1))
+    else
+      target_entities=$((target_entities + 1))
+    fi
+  done
+
+  {
+    printf '{\n'
+    printf '  "generated_at": %s,\n' "$(json_quote "$(timestamp_utc)")"
+    printf '  "target": {\n'
+    printf '    "label": %s,\n' "$(json_quote "$(target_label)")"
+    printf '    "host": %s,\n' "$(json_quote "$(target_host_id)")"
+    printf '    "scope": %s,\n' "$(json_quote "$(target_scope)")"
+    printf '    "path": %s,\n' "$(json_quote "$(short_path "$TARGET")")"
+    printf '    "total": %d,\n' "$target_total"
+    printf '    "entities": %d,\n' "$target_entities"
+    printf '    "symlinks": %d,\n' "$target_symlinks"
+    printf '    "broken_symlinks": %d\n' "$target_broken"
+    printf '  },\n'
+    printf '  "sources": [\n'
+  } > "$outfile"
+
+  local first=1
+  while IFS=: read -r name dir count; do
+    libs=$((libs + 1))
+    total=$((total + count))
+    display_name=$(source_display_name "$name" "$dir" "$cache")
+    [ "$first" -eq 1 ] || printf ',\n' >> "$outfile"
+    first=0
+    printf '    {"name": %s, "display_name": %s, "path": %s, "count": %d, "is_target": %s}' \
+      "$(json_quote "$name")" \
+      "$(json_quote "$display_name")" \
+      "$(json_quote "$(short_path "$dir")")" \
+      "$count" \
+      "$(json_bool "$([ "$dir" = "$TARGET" ] && echo 1 || echo 0)")" >> "$outfile"
+  done < "$cache"
+
+  {
+    printf '\n  ],\n'
+    printf '  "totals": {\n'
+    printf '    "skills": %d,\n' "$total"
+    printf '    "libraries": %d\n' "$libs"
+    printf '  },\n'
+    printf '  "installed": [\n'
+  } >> "$outfile"
+
+  first=1
+  for entry in "$TARGET"/*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    name=$(basename "$entry")
+    link_target=""
+    if [ -L "$entry" ] && [ ! -e "$entry" ]; then
+      kind="broken_symlink"
+      link_target=$(readlink "$entry" 2>/dev/null || true)
+    elif [ -L "$entry" ]; then
+      kind="symlink"
+      link_target=$(readlink "$entry" 2>/dev/null || true)
+    else
+      kind="entity"
+    fi
+    [ "$first" -eq 1 ] || printf ',\n' >> "$outfile"
+    first=0
+    if [ -n "$link_target" ]; then
+      printf '    {"name": %s, "kind": %s, "path": %s, "link_target": %s}' \
+        "$(json_quote "$name")" \
+        "$(json_quote "$kind")" \
+        "$(json_quote "$(short_path "$entry")")" \
+        "$(json_quote "$(short_path "$link_target")")" >> "$outfile"
+    else
+      printf '    {"name": %s, "kind": %s, "path": %s}' \
+        "$(json_quote "$name")" \
+        "$(json_quote "$kind")" \
+        "$(json_quote "$(short_path "$entry")")" >> "$outfile"
+    fi
+  done
+
+  {
+    printf '\n  ]\n'
+    printf '}\n'
+  } >> "$outfile"
+
+  printf '%s' "$outfile"
+}
+
+write_check_state() {
+  local src_query="$1" src_name="$2"
+  local route_candidate_count="$3" route_new_count="$4" route_duplicate_count="$5"
+  local route_risky_count="$6" route_source_issue_count="$7"
+  local route_candidate_names="$8" route_new_names="$9"
+  local route_duplicate_names="${10}" route_risky_names="${11}" route_source_issue_names="${12}"
+  local ready_count="${13}" easy_count="${14}" hard_count="${15}"
+  local issue_count="${16}" cleanup_count="${17}" cleanup_applied="${18}"
+  local upstream_current="${19}" upstream_outdated="${20}" upstream_unknown="${21}"
+  local struct_tmp="${22}" overlap_tmp="${23}" cleanup_tmp="${24}" upstream_tmp="${25}"
+  ensure_state_dir
+  local outfile
+  outfile=$(health_state_path)
+
+  {
+    printf '{\n'
+    printf '  "generated_at": %s,\n' "$(json_quote "$(timestamp_utc)")"
+    printf '  "target": {\n'
+    printf '    "label": %s,\n' "$(json_quote "$(target_label)")"
+    printf '    "host": %s,\n' "$(json_quote "$(target_host_id)")"
+    printf '    "scope": %s,\n' "$(json_quote "$(target_scope)")"
+    printf '    "path": %s\n' "$(json_quote "$(short_path "$TARGET")")"
+    printf '  },\n'
+    if [ -n "$src_query" ] || [ -n "$src_name" ]; then
+      printf '  "route": {\n'
+      printf '    "query": %s,\n' "$(json_quote "$src_query")"
+      printf '    "name": %s,\n' "$(json_quote "${src_name:-$src_query}")"
+      printf '    "candidate_skills": %d,\n' "$route_candidate_count"
+      printf '    "new_skills": %d,\n' "$route_new_count"
+      printf '    "duplicates_in_target": %d,\n' "$route_duplicate_count"
+      printf '    "host_risks": %d,\n' "$route_risky_count"
+      printf '    "source_issues": %d,\n' "$route_source_issue_count"
+      printf '    "candidate_names": %s,\n' "$(json_array_from_csv "$route_candidate_names")"
+      printf '    "new_names": %s,\n' "$(json_array_from_csv "$route_new_names")"
+      printf '    "duplicate_names": %s,\n' "$(json_array_from_csv "$route_duplicate_names")"
+      printf '    "risky_names": %s,\n' "$(json_array_from_csv "$route_risky_names")"
+      printf '    "source_issue_names": %s\n' "$(json_array_from_csv "$route_source_issue_names")"
+      printf '  },\n'
+    else
+      printf '  "route": null,\n'
+    fi
+    printf '  "summary": {\n'
+    printf '    "structure_issues": %d,\n' "$issue_count"
+    printf '    "runtime_ready": %d,\n' "$ready_count"
+    printf '    "runtime_easy_fix": %d,\n' "$easy_count"
+    printf '    "runtime_user_action": %d,\n' "$hard_count"
+    printf '    "upstream_current": %d,\n' "$upstream_current"
+    printf '    "upstream_outdated": %d,\n' "$upstream_outdated"
+    printf '    "upstream_unknown": %d,\n' "$upstream_unknown"
+    printf '    "cleanup_candidates": %d,\n' "$cleanup_count"
+    printf '    "cleanup_applied": %s\n' "$(json_bool "$cleanup_applied")"
+    printf '  },\n'
+    printf '  "structure_issues": [\n'
+  } > "$outfile"
+
+  local first=1 kind name note line category count skills csv
+  while IFS='|' read -r kind name note; do
+    [ -n "$kind" ] || continue
+    [ "$first" -eq 1 ] || printf ',\n' >> "$outfile"
+    first=0
+    printf '    {"kind": %s, "name": %s, "note": %s}' \
+      "$(json_quote "$kind")" \
+      "$(json_quote "$name")" \
+      "$(json_quote "$note")" >> "$outfile"
+  done < "$struct_tmp"
+
+  {
+    printf '\n  ],\n'
+    printf '  "overlap_groups": [\n'
+  } >> "$outfile"
+
+  first=1
+  while IFS='|' read -r category count csv; do
+    [ -n "$category" ] || continue
+    [ "$first" -eq 1 ] || printf ',\n' >> "$outfile"
+    first=0
+    printf '    {"category": %s, "count": %d, "skills": [' \
+      "$(json_quote "$category")" \
+      "$count" >> "$outfile"
+    local inner_first=1 skill
+    IFS=',' read -r -a skills <<< "$csv"
+    for skill in "${skills[@]}"; do
+      [ -n "$skill" ] || continue
+      [ "$inner_first" -eq 1 ] || printf ', ' >> "$outfile"
+      inner_first=0
+      printf '%s' "$(json_quote "$skill")" >> "$outfile"
+    done
+    printf ']}' >> "$outfile"
+  done < "$overlap_tmp"
+
+  {
+    printf '\n  ],\n'
+    printf '  "upstream_sources": [\n'
+  } >> "$outfile"
+
+  first=1
+  while IFS='|' read -r name status repo ref subdir installed_commit latest_commit source_url; do
+    [ -n "$name" ] || continue
+    [ "$first" -eq 1 ] || printf ',\n' >> "$outfile"
+    first=0
+    printf '    {"name": %s, "status": %s, "repo": %s, "ref": %s, "subdir": %s, "installed_commit": %s, "latest_commit": %s, "source_url": %s}' \
+      "$(json_quote "$name")" \
+      "$(json_quote "$status")" \
+      "$(json_quote "$repo")" \
+      "$(json_quote "$ref")" \
+      "$(json_quote "$subdir")" \
+      "$(json_quote "$installed_commit")" \
+      "$(json_quote "$latest_commit")" \
+      "$(json_quote "$source_url")" >> "$outfile"
+  done < "$upstream_tmp"
+
+  {
+    printf '\n  ],\n'
+    printf '  "cleanup_candidates": [\n'
+  } >> "$outfile"
+
+  first=1
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    [ "$first" -eq 1 ] || printf ',\n' >> "$outfile"
+    first=0
+    printf '    %s' "$(json_quote "$name")" >> "$outfile"
+  done < "$cleanup_tmp"
+
+  {
+    printf '\n  ]\n'
+    printf '}\n'
+  } >> "$outfile"
+
+  printf '%s' "$outfile"
+}
+
+record_scan_event() {
+  local total="$1" libs="$2"
+  ensure_state_dir
+  printf '{"ts":%s,"kind":"scan","target":%s,"host":%s,"skills":%d,"libraries":%d}\n' \
+    "$(json_quote "$(timestamp_utc)")" \
+    "$(json_quote "$(short_path "$TARGET")")" \
+    "$(json_quote "$(target_host_id)")" \
+    "$total" \
+    "$libs" >> "$(history_state_path)"
+  trim_history_file
+}
+
+record_check_event() {
+  local src_query="$1" src_name="$2" issue_count="$3" ready_count="$4" easy_count="$5" hard_count="$6"
+  ensure_state_dir
+  if [ -n "$src_query" ] || [ -n "$src_name" ]; then
+    printf '{"ts":%s,"kind":"check","target":%s,"host":%s,"route_query":%s,"route_name":%s,"structure_issues":%d,"runtime_ready":%d,"runtime_easy_fix":%d,"runtime_user_action":%d}\n' \
+      "$(json_quote "$(timestamp_utc)")" \
+      "$(json_quote "$(short_path "$TARGET")")" \
+      "$(json_quote "$(target_host_id)")" \
+      "$(json_quote "$src_query")" \
+      "$(json_quote "${src_name:-$src_query}")" \
+      "$issue_count" \
+      "$ready_count" \
+      "$easy_count" \
+      "$hard_count" >> "$(history_state_path)"
+  else
+    printf '{"ts":%s,"kind":"check","target":%s,"host":%s,"structure_issues":%d,"runtime_ready":%d,"runtime_easy_fix":%d,"runtime_user_action":%d}\n' \
+      "$(json_quote "$(timestamp_utc)")" \
+      "$(json_quote "$(short_path "$TARGET")")" \
+      "$(json_quote "$(target_host_id)")" \
+      "$issue_count" \
+      "$ready_count" \
+      "$easy_count" \
+      "$hard_count" >> "$(history_state_path)"
+  fi
+  trim_history_file
+}
+
+record_steal_event() {
+  local src_name="$1" src_dir="$2" new_count="$3" skip_count="$4" copy_mode="$5"
+  ensure_state_dir
+  printf '{"ts":%s,"kind":"steal","source":%s,"source_path":%s,"target":%s,"host":%s,"mode":%s,"new":%d,"existing":%d}\n' \
+    "$(json_quote "$(timestamp_utc)")" \
+    "$(json_quote "$src_name")" \
+    "$(json_quote "$(short_path "$src_dir")")" \
+    "$(json_quote "$(short_path "$TARGET")")" \
+    "$(json_quote "$(target_host_id)")" \
+    "$(json_quote "$([ "$copy_mode" -eq 1 ] && echo copy || echo symlink)")" \
+    "$new_count" \
+    "$skip_count" >> "$(history_state_path)"
+  trim_history_file
+}
+
 label() {
   case "$1" in
     .claude/skills*) echo "Claude Code" ;;

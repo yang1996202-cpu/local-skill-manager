@@ -1,7 +1,8 @@
 emit_route_check() {
   local src_dir="$1" src_name="$2" thost="$3" thost_label="$4"
   local candidate_count=0 duplicate_count=0 risky_count=0 source_issue_count=0
-  local duplicate_names=() risky_notes="" source_notes=""
+  local candidate_names=() new_names=() duplicate_names=() risky_names=() source_issue_names=()
+  local risky_notes="" source_notes=""
   local entry name content host_notes
 
   echo ""
@@ -12,30 +13,46 @@ emit_route_check() {
     name=$(basename "$entry")
     if [ -L "$entry" ] && [ ! -e "$entry" ]; then
       source_issue_count=$((source_issue_count + 1))
+      source_issue_names+=("$name")
       source_notes+="\n  ${R}🔴${N} ${name} — 来源里是坏链，偷过来也不稳"
       continue
     fi
     [ -d "$entry" ] || continue
     if [ ! -f "${entry}/SKILL.md" ]; then
       source_issue_count=$((source_issue_count + 1))
+      source_issue_names+=("$name")
       source_notes+="\n  ${R}🔴${N} ${name} — 来源缺 SKILL.md，不建议直接偷"
       continue
     fi
 
     candidate_count=$((candidate_count + 1))
+    candidate_names+=("$name")
     if [ -e "${TARGET}/${name}" ] || [ -L "${TARGET}/${name}" ]; then
       duplicate_count=$((duplicate_count + 1))
       duplicate_names+=("$name")
       continue
     fi
+    new_names+=("$name")
 
     content=$(tr '[:upper:]' '[:lower:]' < "${entry}/SKILL.md" 2>/dev/null)
     host_notes=$(cross_host_notes "$content" "$thost" "$thost_label")
     if [ -n "$host_notes" ]; then
       risky_count=$((risky_count + 1))
+      risky_names+=("$name")
       risky_notes+="\n  ${Y}🟡${N} ${name}${host_notes}"
     fi
   done
+
+  CHECK_ROUTE_CANDIDATE_COUNT="$candidate_count"
+  CHECK_ROUTE_NEW_COUNT="${#new_names[@]}"
+  CHECK_ROUTE_DUPLICATE_COUNT="$duplicate_count"
+  CHECK_ROUTE_RISKY_COUNT="$risky_count"
+  CHECK_ROUTE_SOURCE_ISSUE_COUNT="$source_issue_count"
+  CHECK_ROUTE_CANDIDATE_NAMES="$(csv_from_args "${candidate_names[@]+"${candidate_names[@]}"}")"
+  CHECK_ROUTE_NEW_NAMES="$(csv_from_args "${new_names[@]+"${new_names[@]}"}")"
+  CHECK_ROUTE_DUPLICATE_NAMES="$(csv_from_args "${duplicate_names[@]+"${duplicate_names[@]}"}")"
+  CHECK_ROUTE_RISKY_NAMES="$(csv_from_args "${risky_names[@]+"${risky_names[@]}"}")"
+  CHECK_ROUTE_SOURCE_ISSUE_NAMES="$(csv_from_args "${source_issue_names[@]+"${source_issue_names[@]}"}")"
 
   echo "  - 来源可评估技能: ${candidate_count}"
   echo "  - 目标已存在同名: ${duplicate_count}"
@@ -112,6 +129,88 @@ install_hint() {
   esac
 }
 
+emit_upstream_status() {
+  local upstream_tmp="$1"
+  local found=0 current_count=0 outdated_count=0 unknown_count=0
+  local d meta name latest_short installed_short status_note latest_commit
+
+  : > "$upstream_tmp"
+  for d in "$TARGET"/*/; do
+    [ -d "$d" ] || continue
+    meta=$(skill_source_metadata_path "${d%/}")
+    [ -f "$meta" ] || continue
+    read_skill_source_metadata "$meta" || continue
+    [ "$SKILL_SOURCE_PROVIDER" = "github" ] || continue
+    found=1
+  done
+
+  [ "$found" -eq 0 ] && return 0
+
+  echo ""
+  echo -e "${C}🌐 GitHub 上游检查${N}"
+  echo ""
+
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "  - 当前环境没有 gh，暂时只能识别 GitHub 来源，不能检查是否落后。"
+    for d in "$TARGET"/*/; do
+      [ -d "$d" ] || continue
+      meta=$(skill_source_metadata_path "${d%/}")
+      [ -f "$meta" ] || continue
+      read_skill_source_metadata "$meta" || continue
+      [ "$SKILL_SOURCE_PROVIDER" = "github" ] || continue
+      name=$(basename "$d")
+      printf '%s|unknown|%s|%s|%s|%s||%s\n' \
+        "$name" "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_REF" "$SKILL_SOURCE_SUBDIR" \
+        "$SKILL_SOURCE_INSTALLED_COMMIT" "$SKILL_SOURCE_URL" >> "$upstream_tmp"
+      unknown_count=$((unknown_count + 1))
+    done
+    CHECK_UPSTREAM_CURRENT_COUNT="$current_count"
+    CHECK_UPSTREAM_OUTDATED_COUNT="$outdated_count"
+    CHECK_UPSTREAM_UNKNOWN_COUNT="$unknown_count"
+    return 0
+  fi
+
+  for d in "$TARGET"/*/; do
+    [ -d "$d" ] || continue
+    meta=$(skill_source_metadata_path "${d%/}")
+    [ -f "$meta" ] || continue
+    read_skill_source_metadata "$meta" || continue
+    [ "$SKILL_SOURCE_PROVIDER" = "github" ] || continue
+
+    name=$(basename "$d")
+    latest_commit=$(github_latest_path_commit "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_REF" "$SKILL_SOURCE_SUBDIR" 2>/dev/null || true)
+    installed_short=$(printf '%s' "$SKILL_SOURCE_INSTALLED_COMMIT" | cut -c1-7)
+    latest_short=$(printf '%s' "$latest_commit" | cut -c1-7)
+
+    if [ -z "$latest_commit" ]; then
+      echo -e "  ${Y}•${N} ${name} — 暂时查不到上游最新提交"
+      printf '%s|unknown|%s|%s|%s|%s||%s\n' \
+        "$name" "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_REF" "$SKILL_SOURCE_SUBDIR" \
+        "$SKILL_SOURCE_INSTALLED_COMMIT" "$SKILL_SOURCE_URL" >> "$upstream_tmp"
+      unknown_count=$((unknown_count + 1))
+      continue
+    fi
+
+    if [ "$latest_commit" = "$SKILL_SOURCE_INSTALLED_COMMIT" ]; then
+      echo -e "  ${G}✓${N} ${name} — 已跟上游同步 (${installed_short})"
+      status_note="current"
+      current_count=$((current_count + 1))
+    else
+      echo -e "  ${Y}↑${N} ${name} — 上游已更新 (${installed_short} -> ${latest_short})"
+      status_note="outdated"
+      outdated_count=$((outdated_count + 1))
+    fi
+
+    printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
+      "$name" "$status_note" "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_REF" "$SKILL_SOURCE_SUBDIR" \
+      "$SKILL_SOURCE_INSTALLED_COMMIT" "$latest_commit" "$SKILL_SOURCE_URL" >> "$upstream_tmp"
+  done
+
+  CHECK_UPSTREAM_CURRENT_COUNT="$current_count"
+  CHECK_UPSTREAM_OUTDATED_COUNT="$outdated_count"
+  CHECK_UPSTREAM_UNKNOWN_COUNT="$unknown_count"
+}
+
 cmd_check() {
   local src_query="${1:-}"
   echo -e "${C}🔍 Check — 诊断${N}"
@@ -123,6 +222,16 @@ cmd_check() {
   local thost=$(target_host_id)
   local thost_label=$(host_label_from_id "$thost")
   local src_dir="" src_name=""
+  CHECK_ROUTE_CANDIDATE_COUNT=0
+  CHECK_ROUTE_NEW_COUNT=0
+  CHECK_ROUTE_DUPLICATE_COUNT=0
+  CHECK_ROUTE_RISKY_COUNT=0
+  CHECK_ROUTE_SOURCE_ISSUE_COUNT=0
+  CHECK_ROUTE_CANDIDATE_NAMES=""
+  CHECK_ROUTE_NEW_NAMES=""
+  CHECK_ROUTE_DUPLICATE_NAMES=""
+  CHECK_ROUTE_RISKY_NAMES=""
+  CHECK_ROUTE_SOURCE_ISSUE_NAMES=""
   [ -d "$TARGET" ] || { echo -e "  ${R}✗${N} 目标库不存在: ${TARGET}"; return 1; }
   if [ -n "$src_query" ]; then
     src_dir=$(resolve_target_alias "$src_query" 2>/dev/null || true)
@@ -156,6 +265,14 @@ cmd_check() {
   fi
 
   local to_delete=() issue_count=0
+  local structure_tmp overlap_tmp cleanup_tmp upstream_tmp cleanup_applied=0
+  structure_tmp=$(mktemp)
+  overlap_tmp=$(mktemp)
+  cleanup_tmp=$(mktemp)
+  upstream_tmp=$(mktemp)
+  CHECK_UPSTREAM_CURRENT_COUNT=0
+  CHECK_UPSTREAM_OUTDATED_COUNT=0
+  CHECK_UPSTREAM_UNKNOWN_COUNT=0
   local d name
   for d in "$TARGET"/*; do
     [ -e "$d" ] || [ -L "$d" ] || continue
@@ -163,6 +280,8 @@ cmd_check() {
     if [ -L "$d" ] && [ ! -e "$d" ]; then
       echo -e "  ${R}💀${N} $name ${D}(坏链接)${N}"
       to_delete+=("$name")
+      printf 'bad_link|%s|坏链接\n' "$name" >> "$structure_tmp"
+      printf '%s\n' "$name" >> "$cleanup_tmp"
       issue_count=$((issue_count + 1))
       continue
     fi
@@ -170,11 +289,14 @@ cmd_check() {
     if [ ! -f "${d}/SKILL.md" ]; then
       echo -e "  ${R}✗${N} $name ${D}(缺 SKILL.md)${N}"
       to_delete+=("$name")
+      printf 'missing_skill_md|%s|缺 SKILL.md\n' "$name" >> "$structure_tmp"
+      printf '%s\n' "$name" >> "$cleanup_tmp"
       issue_count=$((issue_count + 1))
       continue
     fi
     if ! head -1 "${d}/SKILL.md" | grep -q '^---'; then
       echo -e "  ${Y}⚠${N} $name ${D}(缺 frontmatter)${N}"
+      printf 'missing_frontmatter|%s|缺 frontmatter\n' "$name" >> "$structure_tmp"
       issue_count=$((issue_count + 1))
     fi
   done
@@ -209,6 +331,7 @@ cmd_check() {
       while read -r s; do
         [ -n "$s" ] && echo -e "    ${D}-${N} $s"
       done <<< "$m"
+      printf '%s|%s|%s\n' "$cn" "$cnt" "$(echo "$m" | paste -sd, -)" >> "$overlap_tmp"
       found=1
     fi
   done
@@ -349,6 +472,8 @@ cmd_check() {
     echo -e "$hard_fix_skills"
   fi
 
+  emit_upstream_status "$upstream_tmp"
+
   echo ""
   echo -e "  ${D}💡 提示: 这里是静态体检结果。标记为可用并不等于已经实机验证通过；标记为 🔴 也不等于完全不能用，只是相关功能可能受限${N}"
 
@@ -372,6 +497,7 @@ cmd_check() {
           echo -e "  ${D}rm ${name} (预览)${N}"
         else
           rm -rf "${TARGET}/${name}"
+          cleanup_applied=1
           echo -e "  ${R}✗${N} 已删除 $name"
         fi
       done
@@ -381,6 +507,7 @@ cmd_check() {
       if [[ "$c" =~ ^[Yy]$ ]]; then
         for name in "${to_delete[@]}"; do
           rm -rf "${TARGET}/${name}"
+          cleanup_applied=1
           echo -e "  ${R}✗${N} 已删除 $name"
         done
       fi
@@ -388,5 +515,22 @@ cmd_check() {
       echo -e "  ${D}加 --yes 自动删除${N}"
     fi
   fi
+
+  local health_state
+  health_state=$(write_check_state \
+    "$src_query" "${src_name:-$src_query}" \
+    "$CHECK_ROUTE_CANDIDATE_COUNT" "$CHECK_ROUTE_NEW_COUNT" "$CHECK_ROUTE_DUPLICATE_COUNT" \
+    "$CHECK_ROUTE_RISKY_COUNT" "$CHECK_ROUTE_SOURCE_ISSUE_COUNT" \
+    "$CHECK_ROUTE_CANDIDATE_NAMES" "$CHECK_ROUTE_NEW_NAMES" \
+    "$CHECK_ROUTE_DUPLICATE_NAMES" "$CHECK_ROUTE_RISKY_NAMES" "$CHECK_ROUTE_SOURCE_ISSUE_NAMES" \
+    "$ready_count" "$easy_count" "$hard_count" \
+    "$issue_count" "${#to_delete[@]}" "$cleanup_applied" \
+    "$CHECK_UPSTREAM_CURRENT_COUNT" "$CHECK_UPSTREAM_OUTDATED_COUNT" "$CHECK_UPSTREAM_UNKNOWN_COUNT" \
+    "$structure_tmp" "$overlap_tmp" "$cleanup_tmp" "$upstream_tmp")
+  record_check_event "$src_query" "${src_name:-$src_query}" "$issue_count" "$ready_count" "$easy_count" "$hard_count"
+  rm -f "$structure_tmp" "$overlap_tmp" "$cleanup_tmp" "$upstream_tmp"
+  echo ""
+  echo -e "  ${D}🧩 健康快照已刷新: $(short_path "$health_state")${N}"
+  echo -e "  ${D}🤖 后续跟进优先读: $(short_path "$health_state")${N}"
   return 0
 }

@@ -68,3 +68,49 @@
 
 - 当前产品优势之一就是本地扫描广
 - 为兼容 Windows 把 macOS 能力削弱，会得不偿失
+
+## 2026-04-07 智能和治理分层
+
+### 决定
+
+- Agent 负责智能判断、比较、推荐
+- `skill-manager` 优先负责稳定事实、规则边界、治理依据
+- 这次 MVP 先不追求更聪明的 `act`
+- 先让 `scan / check / steal` 产出可复用状态文件
+- 状态文件不是“写了就算”，后续追问必须 state-first
+
+### 原因
+
+- 如果 `skill-manager` 继续和 Agent 抢“谁更聪明”，边界会重新变糊
+- 真实长期价值不在临场聪明，而在可复盘、可承接、可传承
+- 先有状态底座，后面 Agent 才能稳定接着做解释和建议
+- 如果 Agent 不先消费状态文件，用户体感上几乎不会觉得这次 MVP 有变化
+
+### 这次落地
+
+- `~/.skill-manager/state/latest-scan.json`
+- `~/.skill-manager/state/latest-health.json`
+- `~/.skill-manager/state/history.jsonl`
+- `SKILL.md` / `output-contract.md` 明确了 state-first follow-up 规则
+- `check <来源>` 的健康快照开始额外记录路线级摘要和候选名单
+
+## 2026-04-07 GitHub 安装进入原生链路
+
+### 决定
+
+- `steal` 开始支持直接接收 GitHub 仓库 / tree URL
+- 从 GitHub 安装时写入最小上游元信息
+- `check` 在发现 GitHub 来源元信息后，顺手检查是否落后于上游
+
+### 原因
+
+- 真实使用里，用户已经自然在对话里发 GitHub URL 让 Agent 安装
+- 如果这条路径一直靠 Agent 手动 `git clone + cp`，`skill-manager` 就只像旁观者
+- 最小 MVP 不需要完整 marketplace，但需要把“开放来源安装 + 知道自己落后没”收进原生链路
+
+### 这次落地
+
+- `steal <GitHub URL>` 直接安装到目标库
+- 安装后写入 `.skill-manager-source.env`
+- `check` 输出 GitHub 上游状态，并写进 `latest-health.json`
+- `history.jsonl` 默认自动裁剪，避免状态层无限增长

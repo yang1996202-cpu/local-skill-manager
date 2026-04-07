@@ -76,7 +76,7 @@ case "${1:-help}" in
     echo -e "skill-mgr v${VERSION} ${D}— skill manager${N}"
     echo ""
     echo "  scan             在本地扫描所有技能库"
-    echo "  steal <从> [技能] 从其他技能库迁移到这里"
+    echo "  steal <从> [技能] 从其他技能库迁移到这里，也可直接装 GitHub skill"
     echo "  check [从]       默认检查当前库健康度"
     echo "  act              联网后按当前身份推荐 skills"
     echo ""

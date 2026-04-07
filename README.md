@@ -5,7 +5,7 @@
 它解决 4 件事：
 
 - `scan`：在本地扫描所有技能库
-- `steal`：从其他技能库迁移到这里
+- `steal`：从其他技能库迁移到这里，也可直接安装 GitHub skill
 - `check`：默认检查当前库健康度
 - `act`：联网后按当前身份推荐 skills
 
@@ -27,6 +27,9 @@ bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh check CC-Switch
 # 从别的库迁一个 skill 到这里
 bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh steal CC-Switch github
 
+# 直接从 GitHub 安装一个 skill
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh steal https://github.com/KKKKhazix/Khazix-Skills
+
 # 基于当前身份做在线推荐
 bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act
 ```
@@ -39,11 +42,11 @@ bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act
 
 ### `steal`
 
-把 skill 从别的库迁到当前目标库，支持软链和复制两种方式。
+把 skill 从别的库迁到当前目标库，支持本地库迁移，也支持直接从 GitHub URL 安装。
 
 ### `check`
 
-默认检查当前库健康度；如果传来源，就检查“从 A 偷到这里”值不值。
+默认检查当前库健康度；如果传来源，就检查“从 A 偷到这里”值不值；如果某些 skill 带 GitHub 来源元信息，也会顺手看它们是不是落后于上游。
 
 ### `act`
 
@@ -60,6 +63,7 @@ git clone https://github.com/yang1996202-cpu/local-skill-manager.git ~/.claude/s
 ```bash
 bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh scan
 bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh steal <来源> <技能名>
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh steal <GitHub URL>
 bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh check
 bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh check <来源>
 bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act
@@ -77,7 +81,27 @@ bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act
 
 - `SKILL_MANAGER_DATA_DIR`
 - `SKILL_MANAGER_TARGET`
+- `SKILL_MANAGER_HISTORY_LIMIT`
 - `SKILLSMP_API_KEY`
+
+## MVP State Files
+
+现在这版开始把“稳定事实”落盘，方便 Agent 读取：
+
+- `latest-scan.json` - 最新技能地图
+- `latest-health.json` - 最新健康快照
+- `history.jsonl` - 扫描 / 迁移 / 检查事件流
+
+默认会自动裁剪 `history.jsonl`，只保留最近一段事件，避免状态层越跑越大。
+
+默认位置：
+
+- `~/.skill-manager/state/`
+
+这也是这版 MVP 最核心的变化：
+
+- `skill-manager` 先负责产出事实
+- Agent 再负责解释、比较、推荐
 
 ## Standard Examples
 

@@ -2,6 +2,16 @@
 
 这份文件定义 `scan / steal / check / act` 的固定输出边界。
 
+## state-first follow-ups
+
+命令刚跑完时，后续追问先读状态文件，再做中文总结。
+
+- `scan` 后优先读 `~/.skill-manager/state/latest-scan.json`
+- `check` 后优先读 `~/.skill-manager/state/latest-health.json`
+- `steal` 后优先读 `~/.skill-manager/state/history.jsonl`
+
+只有状态文件缺失、明显过期，或者用户问的是状态里没有的细节，才回退到新的目录扫描、`ls`、`find`、`grep` 或额外联网探测。
+
 ## scan
 
 只做三件事：
@@ -22,8 +32,8 @@
 
 1. 说明从哪里迁到哪里
 2. 说明是软链还是复制
-3. 说明是否成功
-4. 给一个紧邻的下一步
+3. 如果来源是 GitHub，说明跟踪的是哪个 repo / 子目录 / 提交
+4. 说明是否成功并给一个紧邻的下一步
 
 禁止：
 
@@ -37,7 +47,7 @@
 
 1. 当前库 / 路线是谁
 2. 整体健康度
-3. 发现的问题
+3. 发现的问题（包括 GitHub 上游是否落后）
 4. 下一步建议
 
 禁止：

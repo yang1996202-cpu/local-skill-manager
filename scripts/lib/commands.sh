@@ -1,3 +1,105 @@
+copy_skill_dir() {
+  local src_dir="$1" dest_dir="$2"
+  rm -rf "$dest_dir"
+  mkdir -p "$(dirname "$dest_dir")"
+  cp -R "$src_dir" "$dest_dir"
+}
+
+steal_from_github() {
+  local github_url="$1"
+  local parsed owner repo url_ref url_subdir source_url
+  parsed=$(parse_github_source "$github_url") || {
+    echo -e "  ${R}✗${N} 不是可识别的 GitHub URL: $github_url"
+    return 1
+  }
+  IFS='|' read -r owner repo url_ref url_subdir source_url <<< "$parsed"
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo -e "  ${R}✗${N} 当前环境缺少 git，暂时不能直接从 GitHub 安装"
+    return 1
+  fi
+
+  local clone_dir tmp_root selected_dir selected_name selected_rel repo_ref installed_commit
+  tmp_root=$(mktemp -d)
+  clone_dir="${tmp_root}/repo"
+  if [ -n "$url_ref" ]; then
+    git clone --depth 1 --branch "$url_ref" "https://github.com/${owner}/${repo}.git" "$clone_dir" >/dev/null 2>&1 || {
+      rm -rf "$tmp_root"
+      echo -e "  ${R}✗${N} 拉取 GitHub 仓库失败: ${owner}/${repo}@${url_ref}"
+      return 1
+    }
+  else
+    git clone --depth 1 "https://github.com/${owner}/${repo}.git" "$clone_dir" >/dev/null 2>&1 || {
+      rm -rf "$tmp_root"
+      echo -e "  ${R}✗${N} 拉取 GitHub 仓库失败: ${owner}/${repo}"
+      return 1
+    }
+  fi
+
+  repo_ref=$(git -C "$clone_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  [ -n "$repo_ref" ] && [ "$repo_ref" != "HEAD" ] || repo_ref="${url_ref:-main}"
+
+  if [ -n "$url_subdir" ]; then
+    selected_dir="${clone_dir}/${url_subdir}"
+    if [ ! -f "${selected_dir}/SKILL.md" ]; then
+      rm -rf "$tmp_root"
+      echo -e "  ${R}✗${N} GitHub 路径里没找到 SKILL.md: ${url_subdir}"
+      return 1
+    fi
+  else
+    local candidates=() d
+    for d in "$clone_dir"/*; do
+      [ -d "$d" ] || continue
+      [ -f "${d}/SKILL.md" ] || continue
+      candidates+=("$d")
+    done
+    if [ "${#candidates[@]}" -eq 0 ]; then
+      rm -rf "$tmp_root"
+      echo -e "  ${R}✗${N} 仓库顶层没有发现可直接安装的 skill 目录"
+      return 1
+    fi
+    if [ "${#candidates[@]}" -gt 1 ]; then
+      echo "  这个仓库有多个 skill，请指定 tree URL 或子目录："
+      printf '  - %s\n' "${candidates[@]##*/}"
+      rm -rf "$tmp_root"
+      return 1
+    fi
+    selected_dir="${candidates[0]}"
+  fi
+
+  selected_name=$(basename "$selected_dir")
+  if [ -e "${TARGET}/${selected_name}" ] || [ -L "${TARGET}/${selected_name}" ]; then
+    echo -e "  ${Y}•${N} ${selected_name} 已存在，跳过安装"
+    echo -e "  ${D}如果想判断是否落后，可直接运行 check${N}"
+    rm -rf "$tmp_root"
+    record_steal_event "GitHub ${owner}/${repo}" "$source_url" 0 1 1
+    return 0
+  fi
+
+  selected_rel="${selected_dir#$clone_dir/}"
+  installed_commit=$(git -C "$clone_dir" log -1 --format=%H -- "$selected_rel" 2>/dev/null || git -C "$clone_dir" rev-parse HEAD)
+  copy_skill_dir "$selected_dir" "${TARGET}/${selected_name}"
+  write_github_source_metadata "${TARGET}/${selected_name}" "${owner}/${repo}" "$repo_ref" "$selected_rel" "$source_url" "$installed_commit"
+  record_steal_event "GitHub ${owner}/${repo}" "$source_url" 1 0 1
+
+  echo -e "${C}🏴‍☠️ Do${N}  从 ${G}GitHub${N} 安装到 $(friendly_target)"
+  echo "  目标目录: $(short_path "$TARGET")"
+  echo ""
+  echo -e "  ${G}+${N} ${selected_name} ${D}(copy from GitHub)${N}"
+  echo "  上游仓库: ${owner}/${repo}"
+  echo "  跟踪分支: ${repo_ref}"
+  echo "  跟踪子目录: ${selected_rel}"
+  echo "  安装提交: ${installed_commit}"
+  echo ""
+  echo "  下一步建议:"
+  echo "  - 运行 check                看当前库健康度和 GitHub 上游状态"
+  echo "  - 之后如果 GitHub 更新，再跑 check 就能知道自己是不是落后"
+  echo ""
+  echo -e "  ${D}🧩 生命周期事件已写入: $(short_path "$(history_state_path)")${N}"
+  rm -rf "$tmp_root"
+  return 0
+}
+
 cmd_scan() {
   echo -e "${C}📋 Plan — 全盘扫描${N}"
   echo ""
@@ -97,7 +199,13 @@ cmd_scan() {
     fi
   fi
 
+  local scan_state
+  scan_state=$(write_scan_state "$cache")
+  record_scan_event "$total" "$idx"
   rm -f "$my" "$summary"
+  echo ""
+  echo -e "  ${D}🧩 状态已刷新: $(short_path "$scan_state")${N}"
+  echo -e "  ${D}🤖 后续跟进优先读: $(short_path "$scan_state")${N}"
   return 0
 }
 
@@ -123,6 +231,7 @@ cmd_steal() {
     echo "  steal <来源>                从别处整库偷到这里"
     echo "  steal <来源> <技能名>       从别处偷一个到这里"
     echo "  steal <来源> a b c          从别处挑几个偷到这里"
+    echo "  steal <GitHub URL>          直接从 GitHub 仓库安装 skill"
     echo "  --to here                   强制偷到当前项目"
     echo "  --to home-openclaw          偷到主目录 OpenClaw"
     if [ "$(platform_id)" = "windows" ]; then
@@ -130,6 +239,11 @@ cmd_steal() {
     fi
     echo -e "  ${D}平时直接 scan / steal 就行，只有换目标时才用 --to${N}"
     return 0
+  fi
+
+  if is_github_url "$src_query"; then
+    steal_from_github "$src_query"
+    return $?
   fi
 
   local src_dir src_name d name new=0 skip=0
@@ -174,6 +288,9 @@ cmd_steal() {
 
   echo ""
   echo -e "  新增 ${G}${new}${N} | 已有 ${skip}"
+  if [ "$DRY_RUN" -eq 0 ]; then
+    record_steal_event "${src_name:-$src_query}" "$src_dir" "$new" "$skip" "$USE_COPY"
+  fi
   if [ "$new" -gt 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     echo ""
     echo "  下一步建议:"
@@ -207,6 +324,12 @@ cmd_steal() {
       head -30 "${d}SKILL.md" 2>/dev/null | sed 's/^/  /'
       echo ""
     done
+  fi
+
+  if [ "$DRY_RUN" -eq 0 ]; then
+    echo ""
+    echo -e "  ${D}🧩 生命周期事件已写入: $(short_path "$(history_state_path)")${N}"
+    echo -e "  ${D}🤖 如果用户追问“刚新增了什么 / 最近做过什么”，优先读: $(short_path "$(history_state_path)")${N}"
   fi
 }
 
