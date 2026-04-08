@@ -5,6 +5,67 @@ copy_skill_dir() {
   cp -R "$src_dir" "$dest_dir"
 }
 
+compare_skill_dirs() {
+  local left_dir="$1" right_dir="$2"
+  diff -qr --exclude '.skill-manager-source.env' "$left_dir" "$right_dir" >/dev/null 2>&1
+}
+
+resolve_local_skill_dir() {
+  local query="$1" expanded
+  if [ -z "$query" ]; then
+    return 1
+  fi
+  if looks_like_explicit_path "$query"; then
+    expanded=$(expand_input_path "$query")
+    [ -d "$expanded" ] || return 1
+    printf '%s' "$expanded"
+    return 0
+  fi
+  if [ -d "${TARGET}/${query}" ]; then
+    printf '%s' "${TARGET}/${query}"
+    return 0
+  fi
+  return 1
+}
+
+select_github_skill_dir() {
+  local clone_dir="$1" url_subdir="$2" preferred_name="${3:-}"
+  local selected_dir="" d
+  local candidates=()
+
+  if [ -n "$url_subdir" ]; then
+    selected_dir="${clone_dir}/${url_subdir}"
+    [ -f "${selected_dir}/SKILL.md" ] || return 1
+    printf '%s' "$selected_dir"
+    return 0
+  fi
+
+  for d in "$clone_dir"/*; do
+    [ -d "$d" ] || continue
+    [ -f "${d}/SKILL.md" ] || continue
+    candidates+=("$d")
+  done
+
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    return 1
+  fi
+
+  if [ "${#candidates[@]}" -eq 1 ]; then
+    printf '%s' "${candidates[0]}"
+    return 0
+  fi
+
+  if [ -n "$preferred_name" ]; then
+    for d in "${candidates[@]}"; do
+      [ "$(basename "$d")" = "$preferred_name" ] || continue
+      printf '%s' "$d"
+      return 0
+    done
+  fi
+
+  return 2
+}
+
 steal_from_github() {
   local github_url="$1"
   local parsed owner repo url_ref url_subdir source_url
@@ -39,45 +100,46 @@ steal_from_github() {
   repo_ref=$(git -C "$clone_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
   [ -n "$repo_ref" ] && [ "$repo_ref" != "HEAD" ] || repo_ref="${url_ref:-main}"
 
-  if [ -n "$url_subdir" ]; then
-    selected_dir="${clone_dir}/${url_subdir}"
-    if [ ! -f "${selected_dir}/SKILL.md" ]; then
-      rm -rf "$tmp_root"
-      echo -e "  ${R}✗${N} GitHub 路径里没找到 SKILL.md: ${url_subdir}"
-      return 1
-    fi
-  else
-    local candidates=() d
-    for d in "$clone_dir"/*; do
-      [ -d "$d" ] || continue
-      [ -f "${d}/SKILL.md" ] || continue
-      candidates+=("$d")
-    done
-    if [ "${#candidates[@]}" -eq 0 ]; then
-      rm -rf "$tmp_root"
-      echo -e "  ${R}✗${N} 仓库顶层没有发现可直接安装的 skill 目录"
-      return 1
-    fi
-    if [ "${#candidates[@]}" -gt 1 ]; then
-      echo "  这个仓库有多个 skill，请指定 tree URL 或子目录："
-      printf '  - %s\n' "${candidates[@]##*/}"
-      rm -rf "$tmp_root"
-      return 1
-    fi
-    selected_dir="${candidates[0]}"
-  fi
+  selected_dir=$(select_github_skill_dir "$clone_dir" "$url_subdir") || {
+    local status=$?
+    rm -rf "$tmp_root"
+    case "$status" in
+      1) echo -e "  ${R}✗${N} GitHub 路径里没找到可直接安装的 SKILL.md" ;;
+      2)
+        echo "  这个仓库有多个 skill，请指定 tree URL 或子目录："
+        for d in "$clone_dir"/*; do
+          [ -d "$d" ] && [ -f "${d}/SKILL.md" ] && printf '  - %s\n' "${d##*/}"
+        done
+        ;;
+      *) echo -e "  ${R}✗${N} 无法从 GitHub URL 选出 skill 目录" ;;
+    esac
+    return 1
+  }
 
+  selected_rel="${selected_dir#$clone_dir/}"
   selected_name=$(basename "$selected_dir")
+  installed_commit=$(git -C "$clone_dir" log -1 --format=%H -- "$selected_rel" 2>/dev/null || git -C "$clone_dir" rev-parse HEAD)
   if [ -e "${TARGET}/${selected_name}" ] || [ -L "${TARGET}/${selected_name}" ]; then
-    echo -e "  ${Y}•${N} ${selected_name} 已存在，跳过安装"
-    echo -e "  ${D}如果想判断是否落后，可直接运行 check${N}"
+    local existing_dir meta_path
+    existing_dir="${TARGET}/${selected_name}"
+    meta_path=$(skill_source_metadata_path "$existing_dir")
+    if [ -d "$existing_dir" ] && [ ! -L "$existing_dir" ] && [ ! -f "$meta_path" ]; then
+      write_github_source_metadata "$existing_dir" "${owner}/${repo}" "$repo_ref" "$selected_rel" "$source_url" "$installed_commit"
+      echo -e "  ${Y}•${N} ${selected_name} 已存在，已补登记 GitHub 上游信息"
+      echo "  上游仓库: ${owner}/${repo}"
+      echo "  跟踪分支: ${repo_ref}"
+      echo "  跟踪子目录: ${selected_rel}"
+      echo "  安装提交: ${installed_commit}"
+      echo -e "  ${D}下次运行 check 时，就能一起看这个 skill 是否落后上游${N}"
+    else
+      echo -e "  ${Y}•${N} ${selected_name} 已存在，跳过安装"
+      echo -e "  ${D}如果想判断是否落后，可直接运行 check${N}"
+    fi
     rm -rf "$tmp_root"
     record_steal_event "GitHub ${owner}/${repo}" "$source_url" 0 1 1
     return 0
   fi
 
-  selected_rel="${selected_dir#$clone_dir/}"
-  installed_commit=$(git -C "$clone_dir" log -1 --format=%H -- "$selected_rel" 2>/dev/null || git -C "$clone_dir" rev-parse HEAD)
   copy_skill_dir "$selected_dir" "${TARGET}/${selected_name}"
   write_github_source_metadata "${TARGET}/${selected_name}" "${owner}/${repo}" "$repo_ref" "$selected_rel" "$source_url" "$installed_commit"
   record_steal_event "GitHub ${owner}/${repo}" "$source_url" 1 0 1
@@ -100,6 +162,119 @@ steal_from_github() {
   return 0
 }
 
+cmd_bind() {
+  local skill_query="${1:-}" github_url="${2:-}"
+  local cache="$DATA_DIR/last_scan.txt"
+  [ -f "$cache" ] || cache=$(do_scan)
+  resolve_target "$cache"
+
+  if [ -z "$skill_query" ] || [ -z "$github_url" ]; then
+    echo -e "${C}🔗 Bind — 补溯源${N}"
+    echo ""
+    echo "  bind <技能名|路径> <GitHub URL>"
+    echo "  作用：给已手动装好的 GitHub skill 补登记来源，不重装。"
+    echo ""
+    echo "  例子："
+    echo "  bind glm-image https://github.com/ViffyGwaanl/glm-image/tree/main/glm-image"
+    echo "  bind ~/.claude/skills/article-illustrator https://github.com/ViffyGwaanl/glm-image/tree/main/article-illustrator"
+    return 0
+  fi
+
+  local skill_dir skill_name parsed owner repo url_ref url_subdir source_url
+  local tmp_root clone_dir repo_ref selected_dir selected_rel installed_commit=""
+  local latest_commit="" match_note="" meta_path
+
+  skill_dir=$(resolve_local_skill_dir "$skill_query") || {
+    echo -e "  ${R}✗${N} 找不到本地 skill: $skill_query"
+    return 1
+  }
+  [ -f "${skill_dir}/SKILL.md" ] || {
+    echo -e "  ${R}✗${N} 目标目录里没有 SKILL.md: $(short_path "$skill_dir")"
+    return 1
+  }
+  skill_name=$(basename "$skill_dir")
+
+  parsed=$(parse_github_source "$github_url") || {
+    echo -e "  ${R}✗${N} 不是可识别的 GitHub URL: $github_url"
+    return 1
+  }
+  IFS='|' read -r owner repo url_ref url_subdir source_url <<< "$parsed"
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo -e "  ${R}✗${N} 当前环境缺少 git，暂时不能补 GitHub 溯源"
+    return 1
+  fi
+
+  tmp_root=$(mktemp -d)
+  clone_dir="${tmp_root}/repo"
+  if [ -n "$url_ref" ]; then
+    git clone --depth 1 --branch "$url_ref" "https://github.com/${owner}/${repo}.git" "$clone_dir" >/dev/null 2>&1 || {
+      rm -rf "$tmp_root"
+      echo -e "  ${R}✗${N} 拉取 GitHub 仓库失败: ${owner}/${repo}@${url_ref}"
+      return 1
+    }
+  else
+    git clone --depth 1 "https://github.com/${owner}/${repo}.git" "$clone_dir" >/dev/null 2>&1 || {
+      rm -rf "$tmp_root"
+      echo -e "  ${R}✗${N} 拉取 GitHub 仓库失败: ${owner}/${repo}"
+      return 1
+    }
+  fi
+
+  repo_ref=$(git -C "$clone_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  [ -n "$repo_ref" ] && [ "$repo_ref" != "HEAD" ] || repo_ref="${url_ref:-main}"
+
+  selected_dir=$(select_github_skill_dir "$clone_dir" "$url_subdir" "$skill_name") || {
+    local status=$?
+    rm -rf "$tmp_root"
+    case "$status" in
+      1) echo -e "  ${R}✗${N} GitHub 路径里没找到可绑定的 SKILL.md" ;;
+      2)
+        echo "  这个仓库有多个 skill，请指定更具体的 tree URL："
+        for d in "$clone_dir"/*; do
+          [ -d "$d" ] && [ -f "${d}/SKILL.md" ] && printf '  - %s\n' "${d##*/}"
+        done
+        ;;
+      *) echo -e "  ${R}✗${N} 无法从 GitHub URL 选出要绑定的 skill 目录" ;;
+    esac
+    return 1
+  }
+
+  selected_rel="${selected_dir#$clone_dir/}"
+  latest_commit=$(git -C "$clone_dir" log -1 --format=%H -- "$selected_rel" 2>/dev/null || git -C "$clone_dir" rev-parse HEAD)
+  if compare_skill_dirs "$skill_dir" "$selected_dir"; then
+    installed_commit="$latest_commit"
+    match_note="当前本地内容和上游当前版本一致，已按这个提交登记。"
+  else
+    installed_commit=""
+    match_note="来源已登记，但当前本地内容和上游当前版本不完全一致，安装提交暂时未知。"
+  fi
+
+  write_github_source_metadata "$skill_dir" "${owner}/${repo}" "$repo_ref" "$selected_rel" "$source_url" "$installed_commit"
+  record_bind_event "$skill_name" "$skill_dir" "$source_url" "${owner}/${repo}" "$repo_ref" "$selected_rel" "$installed_commit"
+  meta_path=$(skill_source_metadata_path "$skill_dir")
+
+  echo -e "${C}🔗 Bind${N}  给 ${G}${skill_name}${N} 补登记 GitHub 来源"
+  echo "  本地目录: $(short_path "$skill_dir")"
+  echo "  上游仓库: ${owner}/${repo}"
+  echo "  跟踪分支: ${repo_ref}"
+  echo "  跟踪子目录: ${selected_rel}"
+  if [ -n "$installed_commit" ]; then
+    echo "  安装提交: ${installed_commit}"
+  else
+    echo "  安装提交: 暂时未知"
+  fi
+  echo "  来源链接: ${source_url}"
+  echo ""
+  echo "  - ${match_note}"
+  echo -e "  ${D}元信息已写入: $(short_path "$meta_path")${N}"
+  echo ""
+  echo "  下一步建议:"
+  echo "  - 运行 check                看这个 skill 现在是否落后上游"
+  rm -rf "$tmp_root"
+  return 0
+}
+
 show_command_mode_help() {
   echo -e "skill-mgr v${VERSION} ${D}— skill manager${N}"
   echo ""
@@ -108,6 +283,9 @@ show_command_mode_help() {
   echo "  steal <从> [技能] 从其他技能库迁移到这里，也可直接装 GitHub skill"
   echo "  check [从]       默认检查当前库健康度"
   echo "  act [需求]       联网后推荐 skills；不写需求时按身份，有需求时再补排序"
+  echo ""
+  echo "  高级修复："
+  echo "  bind <技能> <GitHub URL>    给已手动装好的 GitHub skill 补来源登记"
   echo ""
   echo -e "  ${D}常用别名: here / home-claude / home-openclaw / home-codex / home-amp${N}"
   echo -e "  ${D}需要换目标时再用 --to；需要先预演偷取时可加 --dry-run${N}"

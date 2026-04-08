@@ -131,7 +131,7 @@ install_hint() {
 
 emit_upstream_status() {
   local upstream_tmp="$1"
-  local found=0 current_count=0 outdated_count=0 unknown_count=0
+  local found=0 tracked_count=0 current_count=0 outdated_count=0 unknown_count=0
   local d meta name latest_short installed_short status_note latest_commit
 
   : > "$upstream_tmp"
@@ -142,12 +142,23 @@ emit_upstream_status() {
     read_skill_source_metadata "$meta" || continue
     [ "$SKILL_SOURCE_PROVIDER" = "github" ] || continue
     found=1
+    tracked_count=$((tracked_count + 1))
   done
 
-  [ "$found" -eq 0 ] && return 0
+  CHECK_UPSTREAM_TRACKED_COUNT="$tracked_count"
+  if [ "$found" -eq 0 ]; then
+    echo ""
+    echo -e "${C}🌐 GitHub 上游检查${N}"
+    echo ""
+    echo "  - 当前没有已登记上游的 GitHub skill。"
+    echo "  - 老 skill 如果要纳入版本管理，可重新运行 steal <GitHub URL> 补登记。"
+    return 0
+  fi
 
   echo ""
   echo -e "${C}🌐 GitHub 上游检查${N}"
+  echo ""
+  echo "  - 已登记上游的 GitHub skill: ${tracked_count}"
   echo ""
 
   if ! command -v gh >/dev/null 2>&1; then
@@ -182,8 +193,19 @@ emit_upstream_status() {
     installed_short=$(printf '%s' "$SKILL_SOURCE_INSTALLED_COMMIT" | cut -c1-7)
     latest_short=$(printf '%s' "$latest_commit" | cut -c1-7)
 
+    if [ -z "$SKILL_SOURCE_INSTALLED_COMMIT" ]; then
+      echo -e "  ${Y}•${N} ${name} — 已登记来源，但安装提交暂时未知"
+      echo "    来源: ${SKILL_SOURCE_URL}"
+      printf '%s|unknown|%s|%s|%s|%s|%s|%s\n' \
+        "$name" "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_REF" "$SKILL_SOURCE_SUBDIR" \
+        "$SKILL_SOURCE_INSTALLED_COMMIT" "$latest_commit" "$SKILL_SOURCE_URL" >> "$upstream_tmp"
+      unknown_count=$((unknown_count + 1))
+      continue
+    fi
+
     if [ -z "$latest_commit" ]; then
       echo -e "  ${Y}•${N} ${name} — 暂时查不到上游最新提交"
+      echo "    来源: ${SKILL_SOURCE_URL}"
       printf '%s|unknown|%s|%s|%s|%s||%s\n' \
         "$name" "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_REF" "$SKILL_SOURCE_SUBDIR" \
         "$SKILL_SOURCE_INSTALLED_COMMIT" "$SKILL_SOURCE_URL" >> "$upstream_tmp"
@@ -200,6 +222,7 @@ emit_upstream_status() {
       status_note="outdated"
       outdated_count=$((outdated_count + 1))
     fi
+    echo "    来源: ${SKILL_SOURCE_URL}"
 
     printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$name" "$status_note" "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_REF" "$SKILL_SOURCE_SUBDIR" \
@@ -273,6 +296,7 @@ cmd_check() {
   CHECK_UPSTREAM_CURRENT_COUNT=0
   CHECK_UPSTREAM_OUTDATED_COUNT=0
   CHECK_UPSTREAM_UNKNOWN_COUNT=0
+  CHECK_UPSTREAM_TRACKED_COUNT=0
   local d name
   for d in "$TARGET"/*; do
     [ -e "$d" ] || [ -L "$d" ] || continue
@@ -525,7 +549,7 @@ cmd_check() {
     "$CHECK_ROUTE_DUPLICATE_NAMES" "$CHECK_ROUTE_RISKY_NAMES" "$CHECK_ROUTE_SOURCE_ISSUE_NAMES" \
     "$ready_count" "$easy_count" "$hard_count" \
     "$issue_count" "${#to_delete[@]}" "$cleanup_applied" \
-    "$CHECK_UPSTREAM_CURRENT_COUNT" "$CHECK_UPSTREAM_OUTDATED_COUNT" "$CHECK_UPSTREAM_UNKNOWN_COUNT" \
+    "$CHECK_UPSTREAM_TRACKED_COUNT" "$CHECK_UPSTREAM_CURRENT_COUNT" "$CHECK_UPSTREAM_OUTDATED_COUNT" "$CHECK_UPSTREAM_UNKNOWN_COUNT" \
     "$structure_tmp" "$overlap_tmp" "$cleanup_tmp" "$upstream_tmp")
   record_check_event "$src_query" "${src_name:-$src_query}" "$issue_count" "$ready_count" "$easy_count" "$hard_count"
   rm -f "$structure_tmp" "$overlap_tmp" "$cleanup_tmp" "$upstream_tmp"

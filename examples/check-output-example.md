@@ -35,6 +35,8 @@
 1. `deep-retrospect-workspace` 缺 `SKILL.md`
 2. `seedream-image` 缺 API key
 3. 部分从其他宿主迁来的 skill 有路径适配警告
+4. 如果已有登记上游的 GitHub skill，也要顺手说清它们现在是否落后上游
+5. 最好直接带一行 `来源: <GitHub URL>`，让人能一眼看懂自己这些 skill 从哪来的
 
 ### 4. 下一步
 

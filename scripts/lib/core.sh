@@ -224,6 +224,12 @@ write_github_source_metadata() {
   } > "$meta"
 }
 
+clear_skill_source_metadata() {
+  local skill_dir="$1" meta
+  meta=$(skill_source_metadata_path "$skill_dir")
+  rm -f "$meta"
+}
+
 read_skill_source_metadata() {
   local meta="$1" key value
   SKILL_SOURCE_PROVIDER=""
@@ -405,8 +411,8 @@ write_check_state() {
   local route_duplicate_names="${10}" route_risky_names="${11}" route_source_issue_names="${12}"
   local ready_count="${13}" easy_count="${14}" hard_count="${15}"
   local issue_count="${16}" cleanup_count="${17}" cleanup_applied="${18}"
-  local upstream_current="${19}" upstream_outdated="${20}" upstream_unknown="${21}"
-  local struct_tmp="${22}" overlap_tmp="${23}" cleanup_tmp="${24}" upstream_tmp="${25}"
+  local upstream_tracked="${19}" upstream_current="${20}" upstream_outdated="${21}" upstream_unknown="${22}"
+  local struct_tmp="${23}" overlap_tmp="${24}" cleanup_tmp="${25}" upstream_tmp="${26}"
   ensure_state_dir
   local outfile
   outfile=$(health_state_path)
@@ -443,6 +449,7 @@ write_check_state() {
     printf '    "runtime_ready": %d,\n' "$ready_count"
     printf '    "runtime_easy_fix": %d,\n' "$easy_count"
     printf '    "runtime_user_action": %d,\n' "$hard_count"
+    printf '    "upstream_tracked": %d,\n' "$upstream_tracked"
     printf '    "upstream_current": %d,\n' "$upstream_current"
     printf '    "upstream_outdated": %d,\n' "$upstream_outdated"
     printf '    "upstream_unknown": %d,\n' "$upstream_unknown"
@@ -580,6 +587,23 @@ record_steal_event() {
     "$(json_quote "$([ "$copy_mode" -eq 1 ] && echo copy || echo symlink)")" \
     "$new_count" \
     "$skip_count" >> "$(history_state_path)"
+  trim_history_file
+}
+
+record_bind_event() {
+  local skill_name="$1" skill_path="$2" source_url="$3" repo="$4" ref="$5" subdir="$6" installed_commit="$7"
+  ensure_state_dir
+  printf '{"ts":%s,"kind":"bind","skill":%s,"skill_path":%s,"target":%s,"host":%s,"source_url":%s,"repo":%s,"ref":%s,"subdir":%s,"installed_commit":%s}\n' \
+    "$(json_quote "$(timestamp_utc)")" \
+    "$(json_quote "$skill_name")" \
+    "$(json_quote "$(short_path "$skill_path")")" \
+    "$(json_quote "$(short_path "$TARGET")")" \
+    "$(json_quote "$(target_host_id)")" \
+    "$(json_quote "$source_url")" \
+    "$(json_quote "$repo")" \
+    "$(json_quote "$ref")" \
+    "$(json_quote "$subdir")" \
+    "$(json_quote "$installed_commit")" >> "$(history_state_path)"
   trim_history_file
 }
 

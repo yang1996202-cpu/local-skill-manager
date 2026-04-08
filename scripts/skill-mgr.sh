@@ -72,6 +72,7 @@ case "${1:-}" in
   experience) cmd_experience "${@:2}" ;;
   scan)    cmd_scan ;;
   steal)   cmd_steal "${2:-}" "${@:3}" ;;
+  bind)    cmd_bind "${2:-}" "${3:-}" ;;
   check)   cmd_check "${@:2}" ;;
   act)     cmd_act "${@:2}" ;;
   check-web) ACT_WEB=1; cmd_check "${@:2}" ;;

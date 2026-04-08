@@ -11,8 +11,12 @@
 
 - `scan`：在本地扫描所有技能库
 - `steal`：从其他库或 GitHub 把 skill 装到这里
-- `check`：检查当前库健康度，也会看 GitHub skill 是否落后上游
+- `check`：检查当前库健康度，也会看已登记上游的 GitHub skill 是否落后上游
 - `act`：联网后给轻量的下一步推荐；如果你没说需求，它会先追问一句，如果你直接说需求，它就按问题补排序
+
+另外还有一个高级修复入口：
+
+- `bind`：给已手动装好的 GitHub skill 补来源登记，不重装
 
 ## 它解决什么问题
 
@@ -32,8 +36,9 @@ Agent 继续负责判断、比较和收口。
 
 - 空调用时先给你选：`一键体验` 或 `命令模式`
 - 有固定命令：`scan / steal / check / act`
+- 手动装好的 GitHub skill，也能用 `bind` 补溯源
 - 有状态文件：`latest-scan.json`、`latest-health.json`、`history.jsonl`
-- `check` 能顺手告诉你 GitHub skill 现在是不是落后上游
+- `check` 能顺手告诉你已登记上游的 GitHub skill 现在是不是落后上游
 
 ## 适合谁用
 
@@ -61,6 +66,9 @@ bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh steal CC-Switch github
 # 直接从 GitHub 安装一个 skill
 bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh steal https://github.com/KKKKhazix/Khazix-Skills
 
+# 已经手动装好了，再补 GitHub 来源登记
+bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh bind glm-image https://github.com/ViffyGwaanl/glm-image/tree/main/glm-image
+
 # 先看本地候选，再追问一句
 bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act
 
@@ -86,6 +94,12 @@ bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act 飞书知识库
 
 默认位置是 `~/.skill-manager/state/`。
 `history.jsonl` 会自动裁剪，避免越跑越大。
+
+如果是老早以前手动装进来的 GitHub skill，还没登记上游来源，
+现在有两个补法：
+
+- 重新跑一次 `steal <GitHub URL>`，如果同名 skill 已存在，会补登记而不重装
+- 直接跑 `bind <技能名|路径> <GitHub URL>`，只补溯源，不动 skill 内容
 
 ## Rule System
 
