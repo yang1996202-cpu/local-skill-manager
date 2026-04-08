@@ -65,7 +65,11 @@ set -- "${_args[@]+"${_args[@]}"}"
 init_data_dir
 init_default_target
 
-case "${1:-help}" in
+case "${1:-}" in
+  "")
+    show_entry_menu
+    ;;
+  experience) cmd_experience "${@:2}" ;;
   scan)    cmd_scan ;;
   steal)   cmd_steal "${2:-}" "${@:3}" ;;
   check)   cmd_check "${@:2}" ;;
@@ -73,14 +77,6 @@ case "${1:-help}" in
   check-web) ACT_WEB=1; cmd_check "${@:2}" ;;
   act-web)   ACT_WEB=1; cmd_act "${@:2}" ;;
   help|*)
-    echo -e "skill-mgr v${VERSION} ${D}— skill manager${N}"
-    echo ""
-    echo "  scan             在本地扫描所有技能库"
-    echo "  steal <从> [技能] 从其他技能库迁移到这里，也可直接装 GitHub skill"
-    echo "  check [从]       默认检查当前库健康度"
-    echo "  act              联网后按当前身份推荐 skills"
-    echo ""
-    echo -e "  ${D}常用别名: here / home-claude / home-openclaw / home-codex / home-amp${N}"
-    echo -e "  ${D}需要换目标时再用 --to；需要联网时再用 --web${N}"
+    show_command_mode_help
     ;;
 esac

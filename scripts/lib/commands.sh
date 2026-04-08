@@ -100,6 +100,218 @@ steal_from_github() {
   return 0
 }
 
+show_command_mode_help() {
+  echo -e "skill-mgr v${VERSION} ${D}— skill manager${N}"
+  echo ""
+  echo "  命令模式："
+  echo "  scan             在本地扫描所有技能库"
+  echo "  steal <从> [技能] 从其他技能库迁移到这里，也可直接装 GitHub skill"
+  echo "  check [从]       默认检查当前库健康度"
+  echo "  act [需求]       联网后推荐 skills；不写需求时按身份，有需求时再补排序"
+  echo ""
+  echo -e "  ${D}常用别名: here / home-claude / home-openclaw / home-codex / home-amp${N}"
+  echo -e "  ${D}需要换目标时再用 --to；需要先预演偷取时可加 --dry-run${N}"
+}
+
+show_entry_menu() {
+  echo -e "skill-mgr v${VERSION} ${D}— skill manager${N}"
+  echo ""
+  echo "  先选一种方式开始："
+  echo "  1. 一键体验    自动跑一轮 scan / check / act，并给一个 steal 预览（只读）"
+  echo "  2. 命令模式    继续用 scan / steal / check / act"
+  echo ""
+
+  if [ -t 0 ]; then
+    echo -n "  选择 [1/2，回车默认 2]："
+    local choice
+    read -r choice
+    echo ""
+    case "$choice" in
+      1|一键体验|体验|experience)
+        cmd_experience
+        return 0
+        ;;
+      2|命令模式|命令|command|"")
+        show_command_mode_help
+        return 0
+        ;;
+      *)
+        echo "  输入未识别，先进入命令模式。"
+        echo ""
+        show_command_mode_help
+        return 0
+        ;;
+    esac
+  fi
+
+  echo "  非交互环境下默认不自动执行。"
+  echo "  - 人类用户：在终端里输入 1 或 2 选择"
+  echo "  - Agent 用户：直接说“一键体验”或“命令模式”"
+}
+
+emit_act_follow_up_question() {
+  local hints="$1"
+  echo ""
+  echo "  💬 先问一句，让下一轮更准："
+  if printf ' %s ' "$hints" | grep -q " feishu "; then
+    echo "  - 你现在更想补哪类能力？直接回一句：飞书协作 / 记忆知识库 / 搜索浏览器 / 图像内容 / 还不确定"
+  elif printf ' %s ' "$hints" | grep -q " knowledge "; then
+    echo "  - 你现在更想补哪类能力？直接回一句：记忆知识库 / 飞书协作 / 搜索浏览器 / 图像内容 / 还不确定"
+  else
+    echo "  - 你现在更想补哪类能力？直接回一句：飞书协作 / 记忆知识库 / 搜索浏览器 / 图像内容 / 还不确定"
+  fi
+  echo "  - 你一回，我就按这句需求重排本地候选、SkillsMP、GitHub 需求雷达。"
+}
+
+read_experience_state_summary() {
+  local scan_state="$1" health_state="$2"
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 1
+  fi
+  python3 - <<'PY' "$scan_state" "$health_state"
+import json, sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    scan = json.load(f)
+with open(sys.argv[2], "r", encoding="utf-8") as f:
+    health = json.load(f)
+
+target = scan.get("target", {})
+totals = scan.get("totals", {})
+summary = health.get("summary", {})
+
+print(
+    "\t".join(
+        str(x)
+        for x in [
+            totals.get("libraries", 0),
+            target.get("total", 0),
+            target.get("entities", 0),
+            target.get("symlinks", 0),
+            target.get("broken_symlinks", 0),
+            summary.get("runtime_ready", 0),
+            summary.get("runtime_easy_fix", 0),
+            summary.get("runtime_user_action", 0),
+            summary.get("structure_issues", 0),
+            summary.get("upstream_outdated", 0),
+        ]
+    )
+)
+PY
+}
+
+cmd_experience() {
+  local intent_query="${*:-}"
+  echo -e "${C}✨ 一键体验 — 先感受，再决定${N}"
+  echo ""
+
+  local cache="$DATA_DIR/last_scan.txt"
+  [ -f "$cache" ] || cache=$(do_scan)
+  resolve_target "$cache"
+
+  local tlabel thost sink old_dry_run old_act_web
+  tlabel=$(target_label)
+  thost=$(target_host_id)
+  [ -d "$TARGET" ] || { echo -e "  ${R}✗${N} 目标库不存在: ${TARGET}"; return 1; }
+
+  sink=$(mktemp)
+  old_dry_run="$DRY_RUN"
+  old_act_web="$ACT_WEB"
+  cmd_scan >"$sink" 2>&1 || true
+  DRY_RUN=1
+  ACT_WEB=0
+  cmd_check >"$sink" 2>&1 || true
+  DRY_RUN="$old_dry_run"
+  ACT_WEB="$old_act_web"
+
+  local scan_state health_state
+  scan_state=$(scan_state_path)
+  health_state=$(health_state_path)
+  cache="$DATA_DIR/last_scan.txt"
+
+  local libs=0 target_total=0 entities=0 symlinks=0 broken=0 ready=0 easy=0 hard=0 structure_issues=0 upstream_outdated=0
+  if [ -f "$scan_state" ] && [ -f "$health_state" ]; then
+    IFS=$'\t' read -r libs target_total entities symlinks broken ready easy hard structure_issues upstream_outdated < <(
+      read_experience_state_summary "$scan_state" "$health_state" 2>/dev/null || true
+    )
+  fi
+
+  collect_local_candidates "$cache" "$thost" "$intent_query"
+  local trending_tmp
+  trending_tmp=$(mktemp)
+  collect_github_trending_radar "$cache" "$intent_query" >"$trending_tmp" || true
+  if [ -n "$ACT_LOCAL_PRIMARY_SOURCE" ] && [ -n "$ACT_LOCAL_PRIMARY_SKILL" ]; then
+    DRY_RUN=1
+    cmd_steal "$ACT_LOCAL_PRIMARY_SOURCE" "$ACT_LOCAL_PRIMARY_SKILL" >"$sink" 2>&1 || true
+    DRY_RUN="$old_dry_run"
+  fi
+  [ -n "${ACT_LOCAL_SUMMARY_FILE:-}" ] && rm -f "$ACT_LOCAL_SUMMARY_FILE"
+  ACT_LOCAL_SUMMARY_FILE=""
+
+  echo "  当前操作对象: $(friendly_target)"
+  echo "  目标目录: $(short_path "$TARGET")"
+  echo ""
+  if [ -n "$intent_query" ]; then
+    echo "  当前问题/需求: ${intent_query}"
+    echo ""
+  fi
+  echo "  先说结论："
+  if [ "${structure_issues:-0}" -gt 0 ] || [ "${broken:-0}" -gt 0 ]; then
+    echo "  - 当前库能继续用，但先把结构问题收干净，再补新 skill 会更稳。"
+  elif [ "${easy:-0}" -gt "${ready:-0}" ]; then
+    echo "  - 当前库底子不差，但很多能力还停在“装了未配”的状态，先整理再补能力更划算。"
+  else
+    echo "  - 当前库底子不错；真要补能力，优先偷本机已验证来源，比直接去大榜翻 repo 更省力。"
+  fi
+  if [ -n "$ACT_LOCAL_PRIMARY_SOURCE" ]; then
+    echo "  - 本地最值得先看的来源是 ${ACT_LOCAL_PRIMARY_SOURCE_DISPLAY}，因为它现在就能评估，动手成本最低。"
+  else
+    echo "  - 这轮没挑出明显的本地首选，下一步更适合先看在线雷达找线索。"
+  fi
+  if [ "${upstream_outdated:-0}" -gt 0 ]; then
+    echo "  - 另外，当前库里还有 ${upstream_outdated} 个 GitHub skill 落后上游，补新之前顺手看一眼会更稳。"
+  fi
+
+  echo ""
+  echo "  这轮体验看到了什么："
+  echo "  - scan：扫到 ${libs:-0} 个技能库；当前这里有 ${target_total:-0} 个技能（${entities:-0} 实体 / ${symlinks:-0} 软链）。"
+  echo "  - check：当前可用 ${ready:-0} 个，需简单配置 ${easy:-0} 个，需用户操作 ${hard:-0} 个。"
+  if [ -n "$ACT_LOCAL_PRIMARY_SOURCE" ]; then
+    echo "  - act：我同时看了本地候选和在线雷达；现在更值得先从本地来源下手。"
+  else
+    echo "  - act：这轮更像是在帮你收集方向，本地和在线都看过了，但还没有明显首选。"
+  fi
+  if [ -n "$ACT_LOCAL_PRIMARY_SOURCE" ] && [ -n "$ACT_LOCAL_PRIMARY_SKILL" ]; then
+    echo "  - steal preview：如果现在只试 1 个，先看 ${ACT_LOCAL_PRIMARY_SOURCE_DISPLAY} -> ${ACT_LOCAL_PRIMARY_SKILL}；${ACT_LOCAL_PRIMARY_REASON}。"
+  elif [ -n "$ACT_LOCAL_PRIMARY_SOURCE" ]; then
+    echo "  - steal preview：如果现在要动手，先跑 check ${ACT_LOCAL_PRIMARY_SOURCE}，再决定要不要偷。"
+  else
+    echo "  - steal preview：当前没有明显本地首选，先保持只读体验更划算。"
+  fi
+  case "$ACT_TRENDING_STATE" in
+    ok)
+      if [ "$ACT_TRENDING_MATCH_MODE" = "intent" ] && [ -n "$intent_query" ]; then
+        echo "  - 在线发现：我还自动接上了 github-trending-cn，并按你当前需求重排了热门仓库。"
+      else
+        echo "  - 在线发现：我还自动接上了 github-trending-cn，当作补充新线索的雷达。"
+      fi
+      ;;
+    limited)
+      echo "  - 在线发现：本机有 github-trending-cn，但当前 GitHub API 限额或鉴权不足，所以这轮没把它当强信号。"
+      ;;
+  esac
+
+  echo ""
+  echo "  你刚刚体验到的是：scan / check / act / steal-preview"
+  if [ -n "$ACT_LOCAL_PRIMARY_SOURCE" ]; then
+    echo "  想继续自己控制，就选命令模式；想直接往前推进，下一步先跑 check ${ACT_LOCAL_PRIMARY_SOURCE}。"
+  else
+    echo "  想继续自己控制，就选命令模式；想继续探索，就单独跑 act 看在线发现雷达。"
+  fi
+
+  rm -f "$sink" "$trending_tmp"
+}
+
 cmd_scan() {
   echo -e "${C}📋 Plan — 全盘扫描${N}"
   echo ""
@@ -334,8 +546,13 @@ cmd_steal() {
 }
 
 cmd_act() {
+  local intent_query="${*:-}"
   ACT_WEB=1
-  echo -e "${C}🎯 Act — 身份驱动的在线推荐${N}"
+  if [ -n "$intent_query" ]; then
+    echo -e "${C}🎯 Act — 身份打底，按问题补排序${N}"
+  else
+    echo -e "${C}🎯 Act — 先看本地，再问一句${N}"
+  fi
   echo ""
   local cache="$DATA_DIR/last_scan.txt"
   [ -f "$cache" ] || cache=$(do_scan)
@@ -360,6 +577,9 @@ cmd_act() {
   else
     echo "  - 主题关键词: 未从上下文里提取到明显方向"
   fi
+  if [ -n "$intent_query" ]; then
+    echo "  - 当前问题/需求: ${intent_query}"
+  fi
 
   for d in "$TARGET"/*; do
     [ -e "$d" ] || [ -L "$d" ] || continue
@@ -373,25 +593,54 @@ cmd_act() {
     echo "  - 前置提醒: 当前库还有 ${blocker_count} 个底层问题，真要动手前建议先跑 check"
   fi
 
+  emit_local_candidates "$cache" "$thost" "$intent_query"
+
+  if [ -z "$intent_query" ]; then
+    echo ""
+    echo "  🌐 在线发现先不展开："
+    echo "  - 这一步我先不直接丢 SkillsMP / GitHub 热榜，避免推荐看起来没人感。"
+    echo "  - 你先告诉我现在更想补什么，我再按那个方向去外面补线索。"
+    emit_act_follow_up_question "$hints"
+    echo ""
+    echo "  ✅ 下一步推荐（供 AI 收口）:"
+    echo "  - 直接回一句你现在更想补的能力方向；我下一轮会按这句需求重排推荐"
+    if [ -n "$ACT_LOCAL_PRIMARY_SOURCE" ]; then
+      echo "  - 如果你现在就想动手，也可以先跑 check ${ACT_LOCAL_PRIMARY_SOURCE}"
+    fi
+    return 0
+  fi
+
+  echo ""
+  echo "  🌐 在线发现雷达（找新线索，不直接替代本地候选）:"
   emit_store_suggestions "$thost"
-  emit_skillsmp_candidates "$thost"
+  emit_skillsmp_candidates "$thost" "$intent_query"
   if [ "${SKILLSMP_LAST_RESULT_STATE:-not_run}" != "ok" ]; then
     emit_web_source_snapshots "$thost"
   fi
-  emit_external_radar "$cache"
+  emit_github_search_radar "$intent_query"
+  emit_github_trending_radar "$cache" "$intent_query"
 
   echo ""
   echo "  ✅ 下一步推荐（供 AI 收口）:"
+  if [ -n "$ACT_LOCAL_PRIMARY_SOURCE" ]; then
+    echo "  - 先从本地候选里选 1 个最贴近当前主题、又明显没装过的来源"
+    echo "  - 下一步先跑 check ${ACT_LOCAL_PRIMARY_SOURCE}，确认这条偷取路线值不值"
+    if [ -n "$ACT_LOCAL_PRIMARY_SKILL" ]; then
+      echo "  - 如果 check 结果干净，再考虑 steal ${ACT_LOCAL_PRIMARY_SOURCE} ${ACT_LOCAL_PRIMARY_SKILL}"
+    fi
+    return 0
+  fi
+
   if [ "${SKILLSMP_LAST_RESULT_STATE:-not_run}" = "ok" ]; then
     if [ "${SKILLSMP_TOP_STARS:-0}" -ge 50 ] && [ "${SKILLSMP_SECOND_STARS:-0}" -lt 20 ]; then
       echo "  - 先把 SkillsMP 里那个唯一明显高热的候选当作重点参考，其余在线结果先只记成备选灵感"
-      echo "  - 然后优先回看外部储备库雷达，找本地已有、能直接 steal 的同类能力"
+      echo "  - 然后优先回看本地候选来源，找能直接 steal 的同类能力"
       echo "  - 真要装之前，先用 check <来源> 看兼容性和值不值得"
       return 0
     fi
     if [ "${SKILLSMP_TOP_STARS:-0}" -lt 20 ] && [ "${SKILLSMP_HIGH_CONFIDENCE_COUNT:-0}" -eq 0 ]; then
       echo "  - 当前在线候选更适合拿来启发方向，不建议直接按它们下手安装"
-      echo "  - 先优先看上面的官方/生态入口，再回到外部储备库雷达里挑本地已有来源"
+      echo "  - 先优先看上面的官方/生态入口，再回到本地候选里挑能直接试的来源"
       echo "  - 真要动手前，先用 check <来源> 看兼容性和值不值得"
       return 0
     fi
@@ -399,7 +648,7 @@ cmd_act() {
   else
     echo "  - 先从上面的官方/生态入口里选 1 个最贴近当前身份的来源，再看它的对应分类"
   fi
-  echo "  - 再回看外部储备库雷达，优先选择本地已经能直接 steal 的来源"
+  echo "  - 再回看本地候选来源，优先选择已经能直接 steal 的来源"
   echo "  - 如果要真正装入当前库，下一步用 check <来源> 或 steal <来源> <技能>"
   return 0
 }
