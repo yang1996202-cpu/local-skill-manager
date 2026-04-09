@@ -336,6 +336,22 @@ show_command_mode_help() {
   echo -e "  ${D}需要换目标时再用 --to；需要先预演偷取时可加 --dry-run${N}"
 }
 
+emit_self_update_notice() {
+  local marker current latest update_cmd
+  marker=$(skill_manager_self_update_check 2>/dev/null || true)
+  [ -n "$marker" ] || return 0
+  case "$marker" in
+    UPGRADE_AVAILABLE*)
+      current=$(printf '%s' "$marker" | awk '{print $2}')
+      latest=$(printf '%s' "$marker" | awk '{print $3}')
+      update_cmd="git -C $(short_path "${ROOT_DIR:-$HOME/.claude/skills/skill-manager}") pull --ff-only"
+      echo -e "${Y}📦 skill-manager 有新版本${N} (${current} -> ${latest})"
+      echo -e "  ${D}更新命令: ${update_cmd}${N}"
+      echo ""
+      ;;
+  esac
+}
+
 show_entry_menu() {
   echo -e "skill-mgr v${VERSION} ${D}— skill manager${N}"
   echo ""

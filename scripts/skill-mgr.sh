@@ -3,7 +3,14 @@
 # scan(Plan) → steal(Do) → check(Check) → act(Act)
 set -euo pipefail
 
-VERSION="5.3.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+VERSION_FILE="${ROOT_DIR}/VERSION"
+VERSION="${SKILL_MANAGER_VERSION:-}"
+if [ -z "$VERSION" ] && [ -f "$VERSION_FILE" ]; then
+  VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+fi
+VERSION="${VERSION:-5.4.0}"
 DEFAULT_DATA_DIR="${XDG_STATE_HOME:-$HOME/.skill-manager}"
 FALLBACK_DATA_DIR="${TMPDIR:-/tmp}/skill-manager-${USER:-user}"
 DATA_DIR="${SKILL_MANAGER_DATA_DIR:-$DEFAULT_DATA_DIR}"
@@ -20,7 +27,6 @@ D='\033[2m'
 N='\033[0m'
 FIRE='\033[1;31m'
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${SCRIPT_DIR}/lib"
 
 load_skill_manager_env() {
@@ -64,6 +70,7 @@ set -- "${_args[@]+"${_args[@]}"}"
 
 init_data_dir
 init_default_target
+emit_self_update_notice
 
 case "${1:-}" in
   "")

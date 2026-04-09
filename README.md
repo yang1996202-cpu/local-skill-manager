@@ -41,6 +41,7 @@ Agent 继续负责判断、比较和收口。
 - 手动装好的 GitHub skill，也能用 `bind` 补溯源
 - 有状态文件：`latest-scan.json`、`latest-health.json`、`history.jsonl`
 - `check` 能顺手告诉你已登记上游的 GitHub skill 现在是不是落后上游
+- 启动时会轻量检查 `skill-manager` 自己是不是有新版本（有缓存，不会每次都联网）
 
 ## 适合谁用
 
@@ -96,6 +97,12 @@ bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act 飞书知识库
 
 默认位置是 `~/.skill-manager/state/`。
 `history.jsonl` 会自动裁剪，避免越跑越大。
+
+如果不想让 `skill-manager` 在启动时检查自己的新版本，可以设：
+
+```bash
+export SKILL_MANAGER_UPDATE_CHECK=false
+```
 
 如果是老早以前手动装进来的 GitHub skill，还没登记上游来源，
 现在有两个补法：

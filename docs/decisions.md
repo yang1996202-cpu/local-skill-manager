@@ -245,3 +245,24 @@
 - `bind ~/.claude/skills/gstack https://github.com/garrytan/gstack` 现在可用
 - 对 repo-root 包，优先用本地 git HEAD 作为安装提交
 - `check` 已能把 gstack 标成一个 GitHub 来源并判断是否落后上游
+
+## 2026-04-09 skill-manager 自己也要会查更新
+
+### 决定
+
+- `skill-manager` 启动时轻量检查自己是不是有新版本
+- 采用 `VERSION` 文件 + 远程原始文件比对 + 本地 TTL 缓存
+- 只提示，不自动升级
+
+### 原因
+
+- gstack 的体感很强，不是因为“会升级”，而是因为“会提醒你现在是不是旧了”
+- 这类能力放在入口层，比让用户自己跑 `git fetch` 友好很多
+- 先做最小能力就够：安静、便宜、可关掉，不引入额外复杂状态
+
+### 这次落地
+
+- 仓库根目录新增 `VERSION`
+- 每次运行 `skill-mgr.sh` 会先尝试比对远端 `VERSION`
+- 默认只在发现远端版本更高时提示一行更新命令
+- 通过 `SKILL_MANAGER_UPDATE_CHECK=false` 可关闭

@@ -119,6 +119,34 @@ timestamp_utc() {
   date -u '+%Y-%m-%dT%H:%M:%SZ'
 }
 
+epoch_now() {
+  date '+%s'
+}
+
+version_looks_valid() {
+  printf '%s' "$1" | grep -qE '^[0-9]+(\.[0-9]+)*$'
+}
+
+version_is_newer() {
+  local candidate="$1" current="$2"
+  version_looks_valid "$candidate" || return 1
+  version_looks_valid "$current" || return 1
+  awk -v candidate="$candidate" -v current="$current" '
+    BEGIN {
+      nc = split(candidate, c, ".")
+      nn = split(current, n, ".")
+      max = (nc > nn ? nc : nn)
+      for (i = 1; i <= max; i++) {
+        cv = (i <= nc ? c[i] : 0) + 0
+        nv = (i <= nn ? n[i] : 0) + 0
+        if (cv > nv) exit 0
+        if (cv < nv) exit 1
+      }
+      exit 1
+    }
+  '
+}
+
 json_escape() {
   printf '%s' "$1" | awk '
     BEGIN { RS=""; ORS="" }
@@ -194,6 +222,66 @@ health_state_path() {
 
 history_state_path() {
   state_path "history.jsonl"
+}
+
+self_update_cache_path() {
+  state_path "last-self-update-check"
+}
+
+skill_manager_self_update_check() {
+  local enabled="${SKILL_MANAGER_UPDATE_CHECK:-1}"
+  case "$enabled" in
+    0|false|FALSE|no|NO) return 0 ;;
+  esac
+
+  command -v curl >/dev/null 2>&1 || return 0
+  [ -n "${VERSION:-}" ] || return 0
+
+  local cache_file remote_url timeout_seconds
+  local cached_status="" cached_local="" cached_remote="" cached_epoch=""
+  local cache_ttl=0 now remote_version=""
+
+  ensure_state_dir
+  cache_file=$(self_update_cache_path)
+  remote_url="${SKILL_MANAGER_REMOTE_VERSION_URL:-https://raw.githubusercontent.com/yang1996202-cpu/local-skill-manager/main/VERSION}"
+  timeout_seconds="${SKILL_MANAGER_UPDATE_CHECK_TIMEOUT:-5}"
+  now=$(epoch_now)
+
+  if [ -f "$cache_file" ]; then
+    IFS='|' read -r cached_status cached_local cached_remote cached_epoch < "$cache_file" || true
+    case "$cached_status" in
+      current|local_ahead) cache_ttl=3600 ;;
+      update_available) cache_ttl=43200 ;;
+      *) cache_ttl=0 ;;
+    esac
+    case "$cached_epoch" in
+      ''|*[!0-9]*) cache_ttl=0 ;;
+    esac
+    if [ "$cache_ttl" -gt 0 ] && [ "$cached_local" = "$VERSION" ] && [ $((now - cached_epoch)) -lt "$cache_ttl" ]; then
+      if [ "$cached_status" = "update_available" ] && version_is_newer "$cached_remote" "$VERSION"; then
+        printf 'UPGRADE_AVAILABLE %s %s\n' "$VERSION" "$cached_remote"
+      fi
+      return 0
+    fi
+  fi
+
+  remote_version="$(curl -fsSL --max-time "$timeout_seconds" "$remote_url" 2>/dev/null || true)"
+  remote_version="$(printf '%s' "$remote_version" | tr -d '[:space:]')"
+  version_looks_valid "$remote_version" || return 0
+
+  if version_is_newer "$remote_version" "$VERSION"; then
+    printf 'update_available|%s|%s|%s\n' "$VERSION" "$remote_version" "$now" > "$cache_file"
+    printf 'UPGRADE_AVAILABLE %s %s\n' "$VERSION" "$remote_version"
+    return 0
+  fi
+
+  if [ "$remote_version" = "$VERSION" ]; then
+    printf 'current|%s|%s|%s\n' "$VERSION" "$remote_version" "$now" > "$cache_file"
+    return 0
+  fi
+
+  printf 'local_ahead|%s|%s|%s\n' "$VERSION" "$remote_version" "$now" > "$cache_file"
+  return 0
 }
 
 history_limit() {
