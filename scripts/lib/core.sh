@@ -154,6 +154,21 @@ csv_from_args() {
   done
 }
 
+append_unique_csv_item() {
+  local csv="$1" item="$2"
+  [ -n "$item" ] || { printf '%s' "$csv"; return 0; }
+  case ",${csv}," in
+    *,"${item}",*) printf '%s' "$csv" ;;
+    *)
+      if [ -n "$csv" ]; then
+        printf '%s,%s' "$csv" "$item"
+      else
+        printf '%s' "$item"
+      fi
+      ;;
+  esac
+}
+
 json_array_from_csv() {
   local csv="$1"
   local first=1 item
@@ -300,6 +315,58 @@ github_latest_path_commit() {
   else
     gh api --method GET "repos/${repo}/commits/${ref}" --jq '.sha' 2>/dev/null
   fi
+}
+
+github_compare_ahead_by() {
+  local repo="$1" base="$2" head="$3"
+  command -v gh >/dev/null 2>&1 || return 1
+  gh api --method GET "repos/${repo}/compare/${base}...${head}" --jq '.ahead_by' 2>/dev/null
+}
+
+github_compare_changed_paths() {
+  local repo="$1" base="$2" head="$3"
+  command -v gh >/dev/null 2>&1 || return 1
+  gh api --method GET "repos/${repo}/compare/${base}...${head}" --jq '.files[].filename' 2>/dev/null
+}
+
+summarize_github_repo_changes() {
+  local local_dir="$1" repo="$2" installed_commit="$3" latest_commit="$4"
+  local ahead_by path top
+  local changed_skill_dirs="" changed_modules="" changed_root_files=""
+  local changed_file_count=0
+
+  [ -d "$local_dir" ] || return 1
+  [ -n "$repo" ] || return 1
+  [ -n "$installed_commit" ] || return 1
+  [ -n "$latest_commit" ] || return 1
+
+  ahead_by=$(github_compare_ahead_by "$repo" "$installed_commit" "$latest_commit" 2>/dev/null || true)
+
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    changed_file_count=$((changed_file_count + 1))
+    case "$path" in
+      */*)
+        top="${path%%/*}"
+        if [ -f "${local_dir}/${top}/SKILL.md" ]; then
+          changed_skill_dirs=$(append_unique_csv_item "$changed_skill_dirs" "$top")
+        else
+          changed_modules=$(append_unique_csv_item "$changed_modules" "$top")
+        fi
+        ;;
+      *)
+        changed_root_files=$(append_unique_csv_item "$changed_root_files" "$path")
+        ;;
+    esac
+  done < <(github_compare_changed_paths "$repo" "$installed_commit" "$latest_commit" 2>/dev/null || true)
+
+  [ "$changed_file_count" -gt 0 ] || return 1
+  printf '%s|%s|%s|%s|%s\n' \
+    "${ahead_by:-0}" \
+    "$changed_file_count" \
+    "$changed_skill_dirs" \
+    "$changed_modules" \
+    "$changed_root_files"
 }
 
 write_scan_state() {
@@ -500,11 +567,11 @@ write_check_state() {
   } >> "$outfile"
 
   first=1
-  while IFS='|' read -r name status repo ref subdir installed_commit latest_commit source_url; do
+  while IFS='|' read -r name status repo ref subdir installed_commit latest_commit source_url change_commit_count change_file_count changed_skill_dirs changed_modules changed_root_files; do
     [ -n "$name" ] || continue
     [ "$first" -eq 1 ] || printf ',\n' >> "$outfile"
     first=0
-    printf '    {"name": %s, "status": %s, "repo": %s, "ref": %s, "subdir": %s, "installed_commit": %s, "latest_commit": %s, "source_url": %s}' \
+    printf '    {"name": %s, "status": %s, "repo": %s, "ref": %s, "subdir": %s, "installed_commit": %s, "latest_commit": %s, "source_url": %s, "change_commit_count": %s, "change_file_count": %s, "changed_skill_dirs": %s, "changed_modules": %s, "changed_root_files": %s}' \
       "$(json_quote "$name")" \
       "$(json_quote "$status")" \
       "$(json_quote "$repo")" \
@@ -512,7 +579,12 @@ write_check_state() {
       "$(json_quote "$subdir")" \
       "$(json_quote "$installed_commit")" \
       "$(json_quote "$latest_commit")" \
-      "$(json_quote "$source_url")" >> "$outfile"
+      "$(json_quote "$source_url")" \
+      "${change_commit_count:-0}" \
+      "${change_file_count:-0}" \
+      "$(json_array_from_csv "$changed_skill_dirs")" \
+      "$(json_array_from_csv "$changed_modules")" \
+      "$(json_array_from_csv "$changed_root_files")" >> "$outfile"
   done < "$upstream_tmp"
 
   {

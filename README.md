@@ -17,6 +17,8 @@
 另外还有一个高级修复入口：
 
 - `bind`：给已手动装好的 GitHub skill 补来源登记，不重装
+  - 普通单 skill 可以补
+  - 像 `gstack` 这种整包 / framework repo 的根目录，也可以补
 
 ## 它解决什么问题
 
@@ -100,6 +102,12 @@ bash ~/.claude/skills/skill-manager/scripts/skill-mgr.sh act 飞书知识库
 
 - 重新跑一次 `steal <GitHub URL>`，如果同名 skill 已存在，会补登记而不重装
 - 直接跑 `bind <技能名|路径> <GitHub URL>`，只补溯源，不动 skill 内容
+
+如果像 `gstack` 这种仓库本身就是一个技能包，不适合直接整包 `steal`，
+更自然的路径是：
+
+1. 按它自己的 README 完整安装
+2. 再跑一次 `bind <本地目录> <GitHub URL>` 把它纳入版本追踪
 
 ## Rule System
 

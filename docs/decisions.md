@@ -225,3 +225,23 @@
 - 如果本地内容和上游当前版本一致，就顺手登记安装提交
 - 如果来源能确认、但安装提交不能确认，就保守标成未知
 - `check` 现在会直接打印 `来源: <GitHub URL>`
+
+## 2026-04-09 多 skill 包也要能追踪
+
+### 决定
+
+- 不把 `skill-manager` 扩成整包框架安装器
+- 但允许 `bind` 绑定像 `gstack` 这种 repo-root 技能包
+- `check` 继续沿用 GitHub commit 对比，直接告诉用户包根目录是否落后上游
+
+### 原因
+
+- 真实世界里，不是所有 GitHub 来源都长得像“一个目录 = 一个 skill”
+- `gstack` 这类仓库更像完整框架：先 `git clone + setup`，再问“我现在是不是最新的”
+- 如果这类仓库完全不纳入 `skill-manager`，用户会觉得版本追踪断了一截
+
+### 这次落地
+
+- `bind ~/.claude/skills/gstack https://github.com/garrytan/gstack` 现在可用
+- 对 repo-root 包，优先用本地 git HEAD 作为安装提交
+- `check` 已能把 gstack 标成一个 GitHub 来源并判断是否落后上游

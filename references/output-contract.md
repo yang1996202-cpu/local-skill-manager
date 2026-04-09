@@ -3,6 +3,7 @@
 这份文件定义 `scan / steal / check / act` 的固定输出边界。
 
 补充：`bind` 是高级修复入口，只在用户已经手动装好 GitHub skill、又想补来源登记时使用。
+如果是 `gstack` 这种整包 / framework repo，`bind` 也可以绑定包根目录。
 
 ## state-first follow-ups
 
@@ -98,6 +99,13 @@
 2. 整体健康度
 3. 发现的问题（包括已登记上游的 GitHub skill 是否落后）
 4. 下一步建议
+
+如果某个 GitHub 来源是整包 / framework repo，并且已经落后：
+
+- 直接给一句短的 `变更摘要`
+- 优先说明 `变更技能`
+- 再补 `共享模块`
+- 最后再补 `发布文件`
 
 禁止：
 

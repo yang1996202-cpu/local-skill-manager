@@ -133,6 +133,8 @@ emit_upstream_status() {
   local upstream_tmp="$1"
   local found=0 tracked_count=0 current_count=0 outdated_count=0 unknown_count=0
   local d meta name latest_short installed_short status_note latest_commit
+  local compare_summary compare_commit_count compare_file_count
+  local changed_skill_dirs changed_modules changed_root_files
 
   : > "$upstream_tmp"
   for d in "$TARGET"/*/; do
@@ -196,7 +198,7 @@ emit_upstream_status() {
     if [ -z "$SKILL_SOURCE_INSTALLED_COMMIT" ]; then
       echo -e "  ${Y}•${N} ${name} — 已登记来源，但安装提交暂时未知"
       echo "    来源: ${SKILL_SOURCE_URL}"
-      printf '%s|unknown|%s|%s|%s|%s|%s|%s\n' \
+      printf '%s|unknown|%s|%s|%s|%s|%s|%s|0|0|||\n' \
         "$name" "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_REF" "$SKILL_SOURCE_SUBDIR" \
         "$SKILL_SOURCE_INSTALLED_COMMIT" "$latest_commit" "$SKILL_SOURCE_URL" >> "$upstream_tmp"
       unknown_count=$((unknown_count + 1))
@@ -206,7 +208,7 @@ emit_upstream_status() {
     if [ -z "$latest_commit" ]; then
       echo -e "  ${Y}•${N} ${name} — 暂时查不到上游最新提交"
       echo "    来源: ${SKILL_SOURCE_URL}"
-      printf '%s|unknown|%s|%s|%s|%s||%s\n' \
+      printf '%s|unknown|%s|%s|%s|%s||%s|0|0|||\n' \
         "$name" "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_REF" "$SKILL_SOURCE_SUBDIR" \
         "$SKILL_SOURCE_INSTALLED_COMMIT" "$SKILL_SOURCE_URL" >> "$upstream_tmp"
       unknown_count=$((unknown_count + 1))
@@ -224,9 +226,26 @@ emit_upstream_status() {
     fi
     echo "    来源: ${SKILL_SOURCE_URL}"
 
-    printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    compare_commit_count=0
+    compare_file_count=0
+    changed_skill_dirs=""
+    changed_modules=""
+    changed_root_files=""
+    if [ "$status_note" = "outdated" ] && [ -z "$SKILL_SOURCE_SUBDIR" ]; then
+      compare_summary=$(summarize_github_repo_changes "$d" "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_INSTALLED_COMMIT" "$latest_commit" 2>/dev/null || true)
+      if [ -n "$compare_summary" ]; then
+        IFS='|' read -r compare_commit_count compare_file_count changed_skill_dirs changed_modules changed_root_files <<< "$compare_summary"
+        echo "    变更摘要: ${compare_commit_count} 个提交 / ${compare_file_count} 个文件"
+        [ -n "$changed_skill_dirs" ] && echo "    变更技能: ${changed_skill_dirs}"
+        [ -n "$changed_modules" ] && echo "    共享模块: ${changed_modules}"
+        [ -n "$changed_root_files" ] && echo "    发布文件: ${changed_root_files}"
+      fi
+    fi
+
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$name" "$status_note" "$SKILL_SOURCE_REPO" "$SKILL_SOURCE_REF" "$SKILL_SOURCE_SUBDIR" \
-      "$SKILL_SOURCE_INSTALLED_COMMIT" "$latest_commit" "$SKILL_SOURCE_URL" >> "$upstream_tmp"
+      "$SKILL_SOURCE_INSTALLED_COMMIT" "$latest_commit" "$SKILL_SOURCE_URL" \
+      "${compare_commit_count:-0}" "${compare_file_count:-0}" "$changed_skill_dirs" "$changed_modules" "$changed_root_files" >> "$upstream_tmp"
   done
 
   CHECK_UPSTREAM_CURRENT_COUNT="$current_count"

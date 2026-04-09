@@ -105,7 +105,7 @@ description: >-
 > 7. **Do Not Make Up Separate Command Semantics**: 解释 `act` 时，要把它说成“基于当前身份的在线推荐视图”，不要讲成另一份 `check` 报告。
 
 > **CRITICAL RULE FOR GITHUB SOURCES**:
-> 当用户直接给出 GitHub skill 仓库或 tree URL，并且意图是“装进来 / 安装这个 skill”时，优先走 `skill-manager` 自己的 `steal <GitHub URL>` 路径，不要第一反应绕出去手动 `git clone + cp`。如果用户说的是“这个 skill 已经手动装好了，但我想补溯源 / 想知道它来自哪”，优先走 `bind <技能名|路径> <GitHub URL>`。如果脚本已经把 GitHub 来源写入元信息，那么后续 `check` 应该把它当成可跟踪上游的 skill，而不是一次性拷贝后就失忆。
+> 当用户直接给出 GitHub skill 仓库或 tree URL，并且意图是“装进来 / 安装这个 skill”时，优先走 `skill-manager` 自己的 `steal <GitHub URL>` 路径，不要第一反应绕出去手动 `git clone + cp`。如果用户说的是“这个 skill 已经手动装好了，但我想补溯源 / 想知道它来自哪”，优先走 `bind <技能名|路径> <GitHub URL>`。如果像 `gstack` 这种 repo-root 的多 skill 包不适合整包 `steal`，允许先按仓库 README 安装，再用 `bind` 把整个包根目录纳入追踪。如果脚本已经把 GitHub 来源写入元信息，那么后续 `check` 应该把它当成可跟踪上游的 skill，而不是一次性拷贝后就失忆。
 
 > **CRITICAL RULE FOR RECOMMENDATION / ONBOARDING**:
 > 每次交互结束时（无论刚展示的是 `scan`、`steal`、`check` 还是 `act`），都要主动推荐另外 3 个命令里最合适的 1 个。比如用户刚跑完 `scan`，就可以推荐 `steal <库> <技能>`，或者推荐 `act` 去看更高层的下一步。这个推荐只要 1 到 2 句，但要结合上下文，说清用户跑了之后会得到什么。

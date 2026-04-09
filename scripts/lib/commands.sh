@@ -66,6 +66,24 @@ select_github_skill_dir() {
   return 2
 }
 
+clone_relative_path() {
+  local clone_dir="$1" selected_dir="$2"
+  if [ "$selected_dir" = "$clone_dir" ]; then
+    printf '%s' ""
+  else
+    printf '%s' "${selected_dir#$clone_dir/}"
+  fi
+}
+
+format_github_subdir_label() {
+  local rel="$1"
+  if [ -n "$rel" ]; then
+    printf '%s' "$rel"
+  else
+    printf '%s' "(repo root)"
+  fi
+}
+
 steal_from_github() {
   local github_url="$1"
   local parsed owner repo url_ref url_subdir source_url
@@ -110,13 +128,19 @@ steal_from_github() {
         for d in "$clone_dir"/*; do
           [ -d "$d" ] && [ -f "${d}/SKILL.md" ] && printf '  - %s\n' "${d##*/}"
         done
+        if [ -f "${clone_dir}/SKILL.md" ]; then
+          echo ""
+          echo "  这个仓库看起来更像技能包 / 框架仓库，不适合直接整包 steal。"
+          echo "  - 想完整安装：按它自己的 README 走 git clone + setup"
+          echo "  - 装好后想纳入版本追踪：运行 bind <本地目录> <GitHub URL>"
+        fi
         ;;
       *) echo -e "  ${R}✗${N} 无法从 GitHub URL 选出 skill 目录" ;;
     esac
     return 1
   }
 
-  selected_rel="${selected_dir#$clone_dir/}"
+  selected_rel=$(clone_relative_path "$clone_dir" "$selected_dir")
   selected_name=$(basename "$selected_dir")
   installed_commit=$(git -C "$clone_dir" log -1 --format=%H -- "$selected_rel" 2>/dev/null || git -C "$clone_dir" rev-parse HEAD)
   if [ -e "${TARGET}/${selected_name}" ] || [ -L "${TARGET}/${selected_name}" ]; then
@@ -128,7 +152,7 @@ steal_from_github() {
       echo -e "  ${Y}•${N} ${selected_name} 已存在，已补登记 GitHub 上游信息"
       echo "  上游仓库: ${owner}/${repo}"
       echo "  跟踪分支: ${repo_ref}"
-      echo "  跟踪子目录: ${selected_rel}"
+      echo "  跟踪子目录: $(format_github_subdir_label "$selected_rel")"
       echo "  安装提交: ${installed_commit}"
       echo -e "  ${D}下次运行 check 时，就能一起看这个 skill 是否落后上游${N}"
     else
@@ -150,7 +174,7 @@ steal_from_github() {
   echo -e "  ${G}+${N} ${selected_name} ${D}(copy from GitHub)${N}"
   echo "  上游仓库: ${owner}/${repo}"
   echo "  跟踪分支: ${repo_ref}"
-  echo "  跟踪子目录: ${selected_rel}"
+  echo "  跟踪子目录: $(format_github_subdir_label "$selected_rel")"
   echo "  安装提交: ${installed_commit}"
   echo ""
   echo "  下一步建议:"
@@ -182,7 +206,7 @@ cmd_bind() {
 
   local skill_dir skill_name parsed owner repo url_ref url_subdir source_url
   local tmp_root clone_dir repo_ref selected_dir selected_rel installed_commit=""
-  local latest_commit="" match_note="" meta_path
+  local latest_commit="" match_note="" meta_path local_head=""
 
   skill_dir=$(resolve_local_skill_dir "$skill_query") || {
     echo -e "  ${R}✗${N} 找不到本地 skill: $skill_query"
@@ -224,25 +248,46 @@ cmd_bind() {
   repo_ref=$(git -C "$clone_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
   [ -n "$repo_ref" ] && [ "$repo_ref" != "HEAD" ] || repo_ref="${url_ref:-main}"
 
-  selected_dir=$(select_github_skill_dir "$clone_dir" "$url_subdir" "$skill_name") || {
-    local status=$?
-    rm -rf "$tmp_root"
-    case "$status" in
-      1) echo -e "  ${R}✗${N} GitHub 路径里没找到可绑定的 SKILL.md" ;;
-      2)
-        echo "  这个仓库有多个 skill，请指定更具体的 tree URL："
-        for d in "$clone_dir"/*; do
-          [ -d "$d" ] && [ -f "${d}/SKILL.md" ] && printf '  - %s\n' "${d##*/}"
-        done
-        ;;
-      *) echo -e "  ${R}✗${N} 无法从 GitHub URL 选出要绑定的 skill 目录" ;;
-    esac
-    return 1
-  }
+  if [ -z "$url_subdir" ] && [ -f "${clone_dir}/SKILL.md" ] && [ "$skill_name" = "$repo" ]; then
+    selected_dir="$clone_dir"
+  else
+    selected_dir=$(select_github_skill_dir "$clone_dir" "$url_subdir" "$skill_name") || {
+      local status=$?
+      rm -rf "$tmp_root"
+      case "$status" in
+        1) echo -e "  ${R}✗${N} GitHub 路径里没找到可绑定的 SKILL.md" ;;
+        2)
+          echo "  这个仓库有多个 skill，请指定更具体的 tree URL："
+          for d in "$clone_dir"/*; do
+            [ -d "$d" ] && [ -f "${d}/SKILL.md" ] && printf '  - %s\n' "${d##*/}"
+          done
+          if [ -f "${clone_dir}/SKILL.md" ]; then
+            echo ""
+            echo "  如果你想绑定的是整个技能包根目录，请直接用仓库名对应的本地目录："
+            echo "  - 例如 bind ~/.claude/skills/${repo} https://github.com/${owner}/${repo}"
+          fi
+          ;;
+        *) echo -e "  ${R}✗${N} 无法从 GitHub URL 选出要绑定的 skill 目录" ;;
+      esac
+      return 1
+    }
+  fi
 
-  selected_rel="${selected_dir#$clone_dir/}"
+  selected_rel=$(clone_relative_path "$clone_dir" "$selected_dir")
   latest_commit=$(git -C "$clone_dir" log -1 --format=%H -- "$selected_rel" 2>/dev/null || git -C "$clone_dir" rev-parse HEAD)
-  if compare_skill_dirs "$skill_dir" "$selected_dir"; then
+
+  if git -C "$skill_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    local_head=$(git -C "$skill_dir" rev-parse HEAD 2>/dev/null || true)
+  fi
+
+  if [ -z "$selected_rel" ] && [ -n "$local_head" ]; then
+    installed_commit="$local_head"
+    if [ "$local_head" = "$latest_commit" ]; then
+      match_note="当前本地包就是上游当前提交，已按本地 git HEAD 登记。"
+    else
+      match_note="来源已登记；当前本地包来自 git 仓库，但比上游最新提交更旧或不同。"
+    fi
+  elif compare_skill_dirs "$skill_dir" "$selected_dir"; then
     installed_commit="$latest_commit"
     match_note="当前本地内容和上游当前版本一致，已按这个提交登记。"
   else
@@ -258,7 +303,7 @@ cmd_bind() {
   echo "  本地目录: $(short_path "$skill_dir")"
   echo "  上游仓库: ${owner}/${repo}"
   echo "  跟踪分支: ${repo_ref}"
-  echo "  跟踪子目录: ${selected_rel}"
+  echo "  跟踪子目录: $(format_github_subdir_label "$selected_rel")"
   if [ -n "$installed_commit" ]; then
     echo "  安装提交: ${installed_commit}"
   else
